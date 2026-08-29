@@ -122,6 +122,7 @@ fun LenixMainScreen() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActionButton(
     icon: ImageVector,
