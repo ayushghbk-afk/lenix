@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+local.properties
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# Keystore
+*.keystore
+*.jks
+
+# Generated files
+bin/
+gen/
+
+# Output APK
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Proguard
+proguard/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Native (will be added later)
+native/
+*.o
+*.so
