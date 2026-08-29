@@ -1,0 +1,48 @@
+name: Build Lenix APK
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+      - arena/**
+    paths:
+      - "app/**"
+      - ".github/workflows/build-apk.yml"
+      - "*.gradle.kts"
+      - "gradle/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Lenix-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
