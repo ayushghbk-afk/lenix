@@ -252,7 +252,14 @@ class ResumableDownloaderTest {
         }
 
         assertEquals(VmError.NETWORK_ERROR, exception.error)
-        assertEquals(2, server.requestCount)
+        // Drain the request log first: on failure the assertion message then
+        // shows exactly what the server saw.
+        val seen = mutableListOf<String>()
+        while (true) {
+            val recorded = server.takeRequest(200, TimeUnit.MILLISECONDS) ?: break
+            seen += "${recorded.method} ${recorded.path} Range=${recorded.getHeader("Range")}"
+        }
+        assertEquals("requests the server saw: $seen", 2, seen.size)
         // Each severed attempt kept the bytes that did arrive, so the resume
         // point advanced past the original 1234 bytes but never restarted from
         // zero (half, then half of the remainder: ~75k bytes on disk).
