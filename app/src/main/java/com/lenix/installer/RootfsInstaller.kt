@@ -79,10 +79,13 @@ class RootfsInstaller(
             commitDir.deleteRecursively()
         }
         stagingDir.renameTo(commitDir)
-        File(instanceDir, "config.json").writeText(
+        // Provenance snapshot of the RootFS that was installed. The instance record
+        // itself is owned by JsonInstanceStore as config.json; this is *what came
+        // from the network*, not manager state.
+        File(instanceDir, "rootfs.json").writeText(
             buildString {
                 appendLine("{")
-                appendLine("  \"id\": \"${manifest.id}\",")
+                appendLine("  \"rootfsId\": \"${manifest.id}\",")
                 appendLine("  \"distro\": \"${manifest.distro}\",")
                 appendLine("  \"codename\": \"${manifest.codename}\",")
                 appendLine("  \"arch\": \"${manifest.arch}\",")

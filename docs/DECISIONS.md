@@ -114,6 +114,32 @@ transform), and we drop a flag that AGP 9 removes outright. Multi-release jars s
 as jackson-core now reach D8 untouched and Android resolves their base (Java 8)
 entries, which is the only variant the runtime would ever load.
 
+## ADR-014 — Instance persistence: per-instance `config.json`, no Room (accepted)
+
+**Context:** Phase 2 needs instances to survive app restarts. `ARCHITECTURE.md` §7.3
+already specifies a `config.json` instance record per instance directory, and ADR-012
+requires state to be persisted on every transition. The obvious "just add Room"
+path would pull in the Room runtime, KSP, and a schema-migration story for what is
+currently a handful of tiny records with no relational queries.
+
+**Decision:** Persist each `VmInstance` as
+`filesDir/instances/<id>/config.json` via `data.JsonInstanceStore` (Jackson, the JSON
+stack already shipped for manifests). Records are written atomically (temp file +
+`Files.move(ATOMIC_MOVE)`), carry a `schemaVersion` gate (newer schema ⇒ record
+skipped, never mangled), and are skipped — not deleted — when corrupt or when the id
+does not match its directory. On manager construction, persisted transient states are
+normalized for process death (`RUNNING/STARTING/STOPPING → READY`,
+`DOWNLOADING/VERIFYING/EXTRACTING/INSTALLING → ERROR + INSTALL_INTERRUPTED`), and any
+normalization is re-persisted. The last-selected instance is remembered in a one-line
+`selected_instance` file. Room stays out until a real query need appears (e.g. install
+event history).
+
+**Consequences:** The store is plain-JVM unit-testable (constructor takes a `File`
+root, not a `Context`); no new Gradle dependencies; the installer's own provenance
+snapshot was renamed to `rootfs.json` so `config.json` unambiguously means the
+instance record from §7.3. The per-step `state.json` staging detail from
+`ROOTFS_SYSTEM.md` remains a Phase 3 concern layered on top of this record.
+
 ---
 
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

@@ -99,24 +99,50 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            VmCard(
-                state = state,
-                instance = instance,
-                onInstall = onInstall,
-                onStart = onStart,
-                onStop = onStop,
-                onOpenInstance = onOpenInstance,
-                onReset = onReset,
-            )
+            if (state.instances.isEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            "No instances yet",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            "Create a Linux instance to get started.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(onClick = onOpenInstance, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Storage, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("OPEN INSTANCE MANAGER")
+                        }
+                    }
+                }
+            } else {
+                VmCard(
+                    state = state,
+                    instance = instance,
+                    onInstall = onInstall,
+                    onStart = onStart,
+                    onStop = onStop,
+                    onOpenInstance = onOpenInstance,
+                    onReset = onReset,
+                )
 
-            OutlinedButton(
-                onClick = onOpenInstance,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = false,
-            ) {
-                Icon(Icons.Default.Storage, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Instance Manager (next phase)")
+                OutlinedButton(
+                    onClick = onOpenInstance,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Storage, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("INSTANCE MANAGER (${state.instances.size})")
+                }
             }
 
             state.message?.let { message ->

@@ -1,8 +1,10 @@
 package com.lenix.ui
 
+import android.app.Application
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -30,7 +32,8 @@ object Routes {
 @Composable
 fun LenixApp() {
     val navController = rememberNavController()
-    val homeViewModel: HomeViewModel = viewModel { HomeViewModel() }
+    val application = LocalContext.current.applicationContext as Application
+    val homeViewModel: HomeViewModel = viewModel { HomeViewModel(application) }
     val homeUiState by homeViewModel.uiState.collectAsState()
 
     NavHost(navController = navController, startDestination = Routes.HOME) {
@@ -50,7 +53,12 @@ fun LenixApp() {
         }
         composable(Routes.INSTANCES) {
             InstanceScreen(
-                vmManager = homeViewModel.vmManager,
+                state = homeUiState,
+                diskUsage = homeViewModel::diskUsageBytes,
+                onSelect = homeViewModel::selectInstance,
+                onCreate = homeViewModel::createInstance,
+                onRename = homeViewModel::renameInstance,
+                onDelete = homeViewModel::deleteInstance,
                 onBack = { navController.popBackStack() },
             )
         }

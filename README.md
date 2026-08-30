@@ -9,6 +9,21 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 ## Status
 
+**Phase 2 — Instance manager and local persistence**
+
+- Multi-instance manager: create / rename / delete instances with slug ids, unique
+  names, and a v0.1 instance cap (4)
+- Per-instance `config.json` records under `filesDir/instances/<id>/`, written
+  atomically (temp file + rename) and reloaded on every app start (ADR-014)
+- Every state transition is persisted (ADR-012); instances survive app restarts
+- Crash recovery: transient states never survive a process restart — a running guest
+  becomes `READY` again, an interrupted install becomes `ERROR` +
+  `INSTALL_INTERRUPTED` (retryable until the resumable downloader lands in Phase 3)
+- Selected instance is remembered across restarts (`selected_instance` file)
+- Functional Instance Manager screen: per-row state, on-disk size, rename, delete,
+  create dialog driven by the distro catalog
+- Unit tests for the store, selection store, and manager persistence/recovery
+
 **Phase 1 — Android Project Foundation**
 
 - Jetpack Compose UI with a home / settings / instance / terminal / desktop / distro
@@ -117,7 +132,7 @@ app/src/main/java/com/lenix/
 │       └── SettingsScreen.kt
 ├── vm/                 # state machine, VmManager, instance/process abstractions
 ├── installer/          # RootFS manifest, verifier, catalog, installer
-├── data/               # local persistence (Room / preferences, next phase)
+├── data/               # local persistence: config.json instance store, selection
 ├── domain/             # models and usecases (next phase)
 └── native/             # NativeBridge (next phase)
 ```
@@ -167,7 +182,7 @@ PROCESS_CRASHED, VNC_CONNECTION_FAILED
 
 - [x] **Phase 0** — design docs and repo structure
 - [x] **Phase 1** — Android project foundation, Compose UI, state machine, manifest parser
-- [ ] **Phase 2** — instance manager and local persistence
+- [x] **Phase 2** — instance manager and local persistence
 - [ ] **Phase 3** — resumable RootFS downloader
 - [ ] **Phase 4** — checksum + signature verification
 - [ ] **Phase 5** — RootFS extraction
