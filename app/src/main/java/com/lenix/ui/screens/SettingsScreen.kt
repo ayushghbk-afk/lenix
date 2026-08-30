@@ -13,7 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,7 +67,7 @@ fun SettingsScreen(
                 value = smartStorage,
                 onValueChange = { smartStorage = it },
             )
-            Divider()
+            HorizontalDivider()
             SettingRow(
                 icon = Icons.Default.Settings,
                 title = "Foreground service",
@@ -75,7 +75,7 @@ fun SettingsScreen(
                 value = allowBackground,
                 onValueChange = { allowBackground = it },
             )
-            Divider()
+            HorizontalDivider()
             SettingRow(
                 icon = Icons.Default.Settings,
                 title = "Auto-start desktop",

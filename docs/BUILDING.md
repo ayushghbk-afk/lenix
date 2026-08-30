@@ -3,8 +3,8 @@
 ## Prerequisites
 
 - **Java Development Kit (JDK) 17** or higher
-- **Android SDK** with API level 34
-- **Gradle 8.4** (included via wrapper)
+- **Android SDK** with API level 37
+- **Gradle 9.5** (included via wrapper)
 
 ## Build Commands
 

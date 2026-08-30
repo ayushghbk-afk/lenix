@@ -13,7 +13,7 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 - Jetpack Compose UI with a home / settings / instance / terminal / desktop / distro
   screen scaffold
-- Gradle 8.4 + AGP 8.2 + Kotlin 1.9
+- Gradle 9.5 + AGP 9.3 (built-in Kotlin)
 - GitHub Actions APK build, lint, and release workflows
 - Explicit VM state machine (`NOT_INSTALLED → DOWNLOADING → VERIFYING → EXTRACTING →
   INSTALLING → READY → STARTING → RUNNING → STOPPING`)
@@ -64,7 +64,7 @@ lenix/
 ### Prerequisites
 
 - JDK 17
-- Android SDK with API 34
+- Android SDK with API 37
 
 ### Build locally
 

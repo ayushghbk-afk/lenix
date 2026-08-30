@@ -435,7 +435,7 @@ resumes by byte range; extraction restarts from the `.tmp` staging dir).
 | `smoke.yml` | nightly | Emulator: install APK → install Alpine (smallest) → probe `uname -a`, `apk`, `Xvnc -version` → RFB connect → assert framebuffer pixels |
 | `release.yml` | tag `v*` | signed APK + native zips + layers, release notes |
 
-Toolchain: AGP 8.x, Kotlin 2.x, Compose, NDK r27, CMake 3.22+, cargo-ndk
+Toolchain: AGP 9.x (built-in Kotlin), Compose, NDK r27, CMake 3.22+, cargo-ndk
 (proot-rs), `mmdebstrap`/`debootstrap`/`apk` in Docker, `minisign` for signing.
 
 ## 12. Performance targets (Lite mode)
