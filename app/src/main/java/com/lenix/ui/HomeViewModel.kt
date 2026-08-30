@@ -15,6 +15,8 @@ import com.lenix.installer.RootfsManifest
 import com.lenix.installer.RootfsManifestVerifier
 import com.lenix.installer.TrustedKeyRing
 import com.lenix.installer.extract.RootfsExtractor
+import com.lenix.nativebridge.EngineInstaller
+import com.lenix.nativebridge.NativeSetup
 import com.lenix.vm.DistroSpec
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
@@ -30,7 +32,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
-
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +48,7 @@ data class HomeUiState(
     val settings: LenixSettings = LenixSettings(),
     val message: String? = null,
     val navigateTo: String? = null,
+    val isEngineAvailable: Boolean = true,
 ) {
     data class InstallProgress(
         val state: VmState? = null,
@@ -111,6 +113,7 @@ class HomeViewModel(
             instances = vmManager.instances.value,
             selectedInstance = vmManager.getInstance(selectedId) ?: vmManager.selectedInstance(),
             settings = settingsStore.load(),
+            isEngineAvailable = guestRuntime.isEngineAvailable(),
         ),
     )
 
@@ -130,6 +133,7 @@ class HomeViewModel(
                     current.copy(
                         instances = instances,
                         selectedInstance = selected,
+                        isEngineAvailable = guestRuntime.isEngineAvailable(),
                     )
                 }
             }
@@ -240,6 +244,73 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * Preinstalls / autofixes the PRoot engine if missing, clearing NATIVE_ENGINE_FAILED.
+     */
+    fun autofixEngine() {
+        val id = mutableHomeState.value.selectedInstance.id
+        viewModelScope.launch(vmDispatcher) {
+            mutableHomeState.update { current ->
+                current.copy(
+                    message = "Installing PRoot engine…",
+                    installProgress = HomeUiState.InstallProgress(
+                        state = VmState.INSTALLING,
+                        fraction = 0.5f,
+                        message = "Preinstalling arm64-v8a PRoot engine…",
+                    ),
+                )
+            }
+            val installed = autoInstallEngineInternal()
+            if (installed) {
+                val instance = vmManager.getInstance(id)
+                if (instance?.state == VmState.ERROR && instance.lastError == VmError.NATIVE_ENGINE_FAILED) {
+                    val rootfs = File(getApplication<Application>().filesDir, "instances/$id/rootfs")
+                    if (rootfs.isDirectory) {
+                        vmManager.markReady(id)
+                    } else {
+                        vmManager.reset(id)
+                    }
+                }
+                mutableHomeState.update { current ->
+                    current.copy(
+                        isEngineAvailable = true,
+                        installProgress = HomeUiState.InstallProgress.Inactive,
+                        message = "PRoot engine installed successfully! Ready to START.",
+                    )
+                }
+            } else {
+                vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
+                mutableHomeState.update { current ->
+                    current.copy(
+                        isEngineAvailable = false,
+                        installProgress = HomeUiState.InstallProgress.Inactive,
+                        message = "Could not install PRoot engine automatically. Place proot under filesDir/native/.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun autoInstallEngineInternal(): Boolean {
+        val app = getApplication<Application>()
+        val abi = try {
+            android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
+        } catch (_: Throwable) {
+            NativeSetup.DEFAULT_ABI
+        }
+        return EngineInstaller.ensureOrInstallEngine(
+            filesDir = app.filesDir,
+            abi = abi,
+            openAsset = { path ->
+                try {
+                    app.assets.open(path)
+                } catch (_: Exception) {
+                    null
+                }
+            },
+        )
+    }
+
     fun start() {
         val id = mutableHomeState.value.selectedInstance.id
         if (vmManager.getInstance(id) == null) return
@@ -247,6 +318,24 @@ class HomeViewModel(
         val background = mutableHomeState.value.settings.allowBackground
         viewModelScope.launch(vmDispatcher) {
             try {
+                if (!guestRuntime.isEngineAvailable()) {
+                    mutableHomeState.update { current ->
+                        current.copy(message = "PRoot engine missing. Preinstalling engine…")
+                    }
+                    val fixed = autoInstallEngineInternal()
+                    if (!fixed) {
+                        vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
+                        mutableHomeState.update { current ->
+                            current.copy(
+                                isEngineAvailable = false,
+                                message = "PRoot is not installed on this device. Tap AUTOFIX ENGINE to install it.",
+                            )
+                        }
+                        return@launch
+                    }
+                    mutableHomeState.update { current -> current.copy(isEngineAvailable = true) }
+                }
+
                 guestRuntime.start(id, desktop = desktop)
                 if (background) {
                     withContext(Dispatchers.Main) {
@@ -311,7 +400,7 @@ class HomeViewModel(
             mutableHomeState.update { state ->
                 state.copy(
                     installProgress = HomeUiState.InstallProgress.Inactive,
-                    message = null,
+                    message = "Instance reset.",
                 )
             }
         }

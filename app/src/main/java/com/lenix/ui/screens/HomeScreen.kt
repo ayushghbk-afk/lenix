@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -43,9 +44,8 @@ import com.lenix.vm.VmError
 import com.lenix.vm.VmState
 
 /**
- * Lenix home screen. This is the "VM manager" landing page: it shows one Debian
- * environment and an explicit INSTALL / START / STOP flow while the Linux engine is
- * still being built.
+ * Lenix home screen. Shows the Linux environment manager with an explicit
+ * INSTALL -> READY -> START flow and PRoot engine preinstall / autofix support.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +56,7 @@ fun HomeScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
+    onAutofixEngine: () -> Unit = {},
     onOpenInstance: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTerminal: () -> Unit = {},
@@ -138,6 +139,7 @@ fun HomeScreen(
                     onStop = onStop,
                     onOpenInstance = onOpenInstance,
                     onReset = onReset,
+                    onAutofixEngine = onAutofixEngine,
                     onOpenTerminal = onOpenTerminal,
                     onOpenDesktop = onOpenDesktop,
                 )
@@ -186,6 +188,7 @@ private fun VmCard(
     onStop: () -> Unit,
     onOpenInstance: () -> Unit,
     onReset: () -> Unit,
+    onAutofixEngine: () -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenDesktop: () -> Unit,
 ) {
@@ -313,8 +316,8 @@ private fun VmCard(
                                 "This RootFS layer is compressed in a format the app cannot " +
                                     "read yet — zstd needs libpvmnative. xz and gz layers work today."
                             VmError.NATIVE_ENGINE_FAILED ->
-                                "PRoot is not installed on this device. Unpack the arm64-v8a " +
-                                    "engine into the app's native directory, then START again."
+                                "PRoot is not installed on this device. Tap AUTOFIX ENGINE " +
+                                    "to automatically install or preinstall the arm64-v8a PRoot engine."
                             VmError.VNC_CONNECTION_FAILED ->
                                 "The built-in viewer could not reach Xvnc on loopback."
                             VmError.CHECKSUM_FAILED ->
@@ -350,6 +353,16 @@ private fun VmCard(
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("RESUME INSTALL")
+                        }
+                    }
+                    if (error == VmError.NATIVE_ENGINE_FAILED) {
+                        Button(
+                            onClick = onAutofixEngine,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Default.Build, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("AUTOFIX ENGINE")
                         }
                     }
                     OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {

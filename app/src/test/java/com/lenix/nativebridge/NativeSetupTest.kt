@@ -39,4 +39,35 @@ class NativeSetupTest {
         )
         assertEquals(listOf("proot"), second.skipped)
     }
+
+    @Test
+    fun `ensureOrInstallEngine installs from assets when present`() {
+        val files = tmp.newFolder("files_engine")
+        val payload = "proot-binary-content".toByteArray()
+        val success = EngineInstaller.ensureOrInstallEngine(
+            filesDir = files,
+            abi = "arm64-v8a",
+            openAsset = { path ->
+                if (path.endsWith("/proot")) ByteArrayInputStream(payload) else null
+            },
+        )
+        assertTrue(success)
+        assertTrue(NativeSetup.hasProot(files, "arm64-v8a"))
+    }
+
+    @Test
+    fun `ensureOrInstallEngine downloads when asset is missing`() {
+        val files = tmp.newFolder("files_download")
+        val success = EngineInstaller.ensureOrInstallEngine(
+            filesDir = files,
+            abi = "arm64-v8a",
+            openAsset = { null },
+            downloader = { _, dest ->
+                dest.writeBytes("downloaded-proot".toByteArray())
+                true
+            },
+        )
+        assertTrue(success)
+        assertTrue(NativeSetup.hasProot(files, "arm64-v8a"))
+    }
 }
