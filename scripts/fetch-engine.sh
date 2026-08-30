@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
 # Fetch the real PRoot engine binaries for the signed APK payload.
 #
-# The engine must live in app/src/main/resources/lib/<abi>/ so it lands in the APK's
-# lib/<abi>/ and Android's package manager extracts it to /data/app/<pkg>/lib/<abi>/
-# (ApplicationInfo.nativeLibraryDir) — the only app-reachable location where SELinux
-# allows execve() on Android 10+ (W^X policy, see docs/DECISIONS.md ADR-021).
+# The engine must land in the APK's lib/<abi>/ so Android's package manager extracts it
+# to /data/app/<pkg>/lib/<abi>/ (ApplicationInfo.nativeLibraryDir) — the only
+# app-reachable location where SELinux allows execve() on Android 10+ (W^X policy, see
+# docs/DECISIONS.md ADR-021). A copy under assets/ -> filesDir/native/ FAILS with
+# "error=13, Permission denied".
 #
-# Why resources/lib and not jniLibs: Android Studio/AGP only packages `*.so` files
-# from jniLibs directories, while src/main/resources/lib/<abi>/ is the documented
-# (wrap.sh) route for packaging arbitrary executables under APK lib/<abi>/.
-# A copy under assets/ -> filesDir/native/ FAILS with "error=13, Permission denied".
+# The payload goes in app/src/main/jniLibs/<abi>/. The old wrap.sh-style route
+# (src/main/resources/lib/<abi>/) is no longer packaged into lib/<abi>/ by AGP, which
+# produced an APK whose lib/arm64-v8a/ held only dependency .so files and no engine.
+# jniLibs is the supported path and packages every *.so it finds — which is exactly
+# what the payload is named now.
+#
+# EVERY staged file is named lib*.so, executables included. Packaging a file into
+# lib/<abi>/ is not enough to get it onto the device: for a non-debuggable package the
+# installer's NativeLibrariesIterator keeps only entries whose base name starts with
+# "lib" and ends with ".so" (frameworks/base, libs/androidfw/ApkParsing.cpp,
+# ValidLibraryPathLastSlash()). Anything else — `proot`, `loader`, `libtalloc.so.2`,
+# whose ".2" suffix also fails the check — is packaged and then silently dropped, so
+# the app reports "No PRoot engine found" on release builds while debug builds work.
+# Renaming is safe: PRoot is exec'd by absolute path and its loader is pinned via
+# $PROOT_LOADER. The SONAME/DT_NEEDED entries are patched to match the new file names
+# so the bionic linker still resolves the deps.
 #
 # Pulls the Termux proot package .deb (bionic-linked PRoot + its static loader + the
 # libtalloc/libandroid-shmem deps) and unpacks the right pieces. Works on Ubuntu CI
@@ -19,12 +32,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ABI="${1:-arm64-v8a}"
 DEB_ARCH="${DEB_ARCH:-aarch64}"
-TARGET_DIR="$ROOT/app/src/main/resources/lib/$ABI"
+TARGET_DIR="$ROOT/app/src/main/jniLibs/$ABI"
 PROOT_VERSION="${PROOT_VERSION:-5.1.107.92}"
 PROOT_DEB_URL="${PROOT_DEB_URL:-https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${PROOT_VERSION}_${DEB_ARCH}.deb}"
 # Optional pinning: set PROOT_DEB_SHA256 to the .deb's SHA-256 (from the Termux
 # Packages index for this version) to fail on unexpected content.
 PROOT_DEB_SHA256="${PROOT_DEB_SHA256:-}"
+
+# Payload file names — these MUST match com.lenix.nativebridge.NativeSetup.
+OUT_PROOT="libproot.so"
+OUT_LOADER="libprootloader.so"
+OUT_LOADER32="libprootloader32.so"
+OUT_TALLOC="libtalloc.so"
+OUT_SHMEM="libandroid-shmem.so"
 
 WORK="$(mktemp -d)"
 STAGE="$WORK/stage"
@@ -74,14 +94,56 @@ copy_engine() {
 }
 
 echo "Extracting engine payload from the .deb ..."
-copy_engine proot  "$PREFIX/bin/proot"
-copy_engine loader "$PREFIX/libexec/proot/loader"
-copy_engine loader32 "$PREFIX/libexec/proot/loader32"
-copy_engine libtalloc.so.2 "$PREFIX/lib/libtalloc.so.2"
-copy_engine libandroid-shmem.so "$PREFIX/lib/libandroid-shmem.so"
+copy_engine "$OUT_PROOT"    "$PREFIX/bin/proot"
+copy_engine "$OUT_LOADER"   "$PREFIX/libexec/proot/loader"
+copy_engine "$OUT_LOADER32" "$PREFIX/libexec/proot/loader32"
+copy_engine "$OUT_TALLOC"   "$PREFIX/lib/libtalloc.so.2"
+copy_engine "$OUT_SHMEM"    "$PREFIX/lib/libandroid-shmem.so"
+
+# ---- ELF name fixups ----------------------------------------------------------
+# libtalloc ships as libtalloc.so.2 with SONAME "libtalloc.so.2", and proot's
+# DT_NEEDED points at that name. We ship it as libtalloc.so, so both strings have to
+# be rewritten or the bionic linker fails with "library libtalloc.so.2 not found".
+# patchelf is the clean route; fall back to a fixed-length in-place patch of the
+# .dynstr entry ("libtalloc.so.2" -> "libtalloc.so\0\0") which keeps every offset
+# stable and is therefore safe without a full ELF rewrite.
+patch_soname_and_needed() {
+  local file="$1" old="$2" new="$3"
+  [ -f "$file" ] || return 0
+  if command -v patchelf >/dev/null 2>&1; then
+    if [ "$(basename "$file")" = "$OUT_TALLOC" ]; then
+      patchelf --set-soname "$new" "$file" 2>/dev/null || true
+    fi
+    patchelf --replace-needed "$old" "$new" "$file" 2>/dev/null || true
+    return 0
+  fi
+  # Fallback: byte-patch the string table in place. Only valid because
+  # len(new) <= len(old); the remainder is NUL-padded so the string ends early.
+  python3 - "$file" "$old" "$new" <<'PY'
+import sys
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+if len(new) > len(old):
+    raise SystemExit(f"cannot patch {old} -> {new}: new name is longer")
+data = bytearray(open(path, 'rb').read())
+needle = old.encode() + b"\0"
+repl = new.encode() + b"\0" * (len(needle) - len(new))
+n = data.count(needle)
+if n:
+    data = bytearray(bytes(data).replace(needle, repl))
+    open(path, 'wb').write(data)
+print(f"    patched {n} occurrence(s) of {old} -> {new} in {path.split('/')[-1]}")
+PY
+}
+
+if [ -d "$STAGE" ]; then
+  echo "Fixing ELF dependency names to match the payload file names ..."
+  for f in "$STAGE"/*; do
+    patch_soname_and_needed "$f" "libtalloc.so.2" "$OUT_TALLOC"
+  done
+fi
 
 # Sanity checks: real ELF, correct machine.
-proot_file="$STAGE/proot"
+proot_file="$STAGE/$OUT_PROOT"
 if [ ! -f "$proot_file" ]; then
   echo "ERROR: proot was not extracted. Check the .deb path/version." >&2
   exit 1
@@ -91,7 +153,6 @@ if [ "$magic" != "7f454c46" ]; then
   echo "ERROR: $proot_file is not an ELF (magic $magic). Refusing to ship it." >&2
   exit 1
 fi
-machine="$(od -An -tu2 -j18 -N2 "$proot_file" | tr -d ' ')"
 # `od -tu2` prints host byte order; parse little-endian explicitly for portability.
 machine_hex="$(od -An -tx1 -j18 -N2 "$proot_file" | tr -d ' \n')"
 machine=$(( 0x${machine_hex:2:2}${machine_hex:0:2} ))
@@ -105,6 +166,30 @@ esac
 if [ "$machine" != "$want_machine" ]; then
   echo "ERROR: proot e_machine=$machine does not match $ABI ($want_machine)." >&2
   exit 1
+fi
+
+# Every staged name must survive Android's installer filter, or the file ships in the
+# APK and never reaches the device. Catch that here rather than on a user's phone.
+bad=0
+for f in "$STAGE"/*; do
+  base="$(basename "$f")"
+  case "$base" in
+    lib*.so) ;;
+    *) echo "ERROR: '$base' is not named lib*.so — Android will not extract it." >&2
+       bad=1 ;;
+  esac
+done
+[ "$bad" -eq 0 ] || exit 1
+
+# A leftover payload under the old names would keep shipping dead weight in the APK
+# (and confuse the on-device diagnosis), so clear them out.
+if [ -d "$TARGET_DIR" ]; then
+  for stale in proot loader loader32 tini busybox libtalloc.so.2; do
+    if [ -e "$TARGET_DIR/$stale" ]; then
+      echo "  - removing stale payload $stale (never extracted by Android)"
+      rm -f "$TARGET_DIR/$stale"
+    fi
+  done
 fi
 
 mkdir -p "$TARGET_DIR"

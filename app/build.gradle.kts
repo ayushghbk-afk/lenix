@@ -47,12 +47,14 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-        // Engine binaries (proot, loader, tini, libtalloc…) ship in
-        // src/main/resources/lib/<abi>/ so the APK contains them under lib/<abi>/ and the
+        // Engine binaries (libproot.so, libprootloader.so, libtalloc.so…) ship in
+        // src/main/jniLibs/<abi>/ so the APK contains them under lib/<abi>/ and the
         // package manager EXTRACTS them to /data/app/.../lib/<abi>/ — the only
         // app-reachable location where SELinux allows execve() on Android 10+ (ADR-021).
-        // (AGP only packages *.so from jniLibs; resources/lib/<abi>/ is the documented
-        // route for arbitrary executables — same trick as wrap.sh.)
+        // They are executables named lib*.so precisely so both AGP (which packages only
+        // *.so from jniLibs) and the installer (which extracts only lib*.so) keep them.
+        // useLegacyPackaging=true forces extraction to disk instead of being loaded
+        // straight from the APK — an exec target needs a real file path (ADR-022).
         jniLibs {
             useLegacyPackaging = true
         }
@@ -129,6 +131,169 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+/**
+ * Guard against the two ways the engine payload silently disappears from an APK.
+ *
+ * 1. The payload dir is empty (nobody ran `scripts/fetch-engine.sh`), so the app builds
+ *    fine and then fails on-device with NATIVE_ENGINE_FAILED.
+ * 2. A file is there but not named `lib*.so`. Packaging it under `lib/<abi>/` is not
+ *    enough: for a non-debuggable package Android's installer only extracts entries
+ *    whose base name starts with `lib` and ends with `.so`
+ *    (frameworks/base, libs/androidfw/ApkParsing.cpp, ValidLibraryPathLastSlash()), so
+ *    a `proot` / `loader` / `libtalloc.so.2` payload never reaches nativeLibraryDir.
+ *    Debug builds relax that filter, which is exactly why this bug survives testing.
+ *
+ * Release builds fail hard; debug builds only warn, so contributors can still work on
+ * UI without fetching GPL binaries.
+ */
+val engineAbis = listOf("arm64-v8a")
+
+// Plain (abi -> dir) pairs resolved during configuration: the checks below run at
+// execution time and must not touch `Project` (configuration-cache safe).
+val enginePayloadDirs: List<Pair<String, File>> =
+    engineAbis.map { abi -> abi to file("src/main/jniLibs/$abi") }
+
+// Pure lambda (no script/Project capture) so the providers below stay
+// configuration-cache safe.
+val engineProblemsOf: (List<Pair<String, File>>) -> List<String> = { dirs ->
+    dirs.flatMap { (abi, dir) ->
+        val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
+        if (files.isEmpty()) {
+            listOf(
+                "No PRoot engine payload in app/src/main/jniLibs/$abi/ — " +
+                    "run ./scripts/fetch-engine.sh $abi"
+            )
+        } else {
+            files.map { it.name }
+                .filterNot { it.startsWith("lib") && it.endsWith(".so") }
+                .map {
+                    "app/src/main/jniLibs/$abi/$it is not named lib*.so, so Android " +
+                        "will not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
+                }
+        }
+    }
+}
+
+/**
+ * Fetches the engine payload as part of the build.
+ *
+ * The binaries are GPL and intentionally untracked, so *something* has to run
+ * `scripts/fetch-engine.sh` or the APK ships an empty `lib/<abi>/`. Doing it here rather
+ * than only in a CI workflow means a plain `./gradlew assembleDebug` on a fresh clone
+ * also produces a working APK. Set `-PskipEngineFetch=true` (or `SKIP_ENGINE_FETCH=1`)
+ * to build the UI without pulling binaries; the payload check then only warns.
+ */
+val fetchEnginePayload by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Downloads the PRoot engine payload into src/main/jniLibs/<abi>/."
+
+    val abi = engineAbis.first()
+    val script = rootProject.file("scripts/fetch-engine.sh")
+    val payloadDir = file("src/main/jniLibs/$abi")
+
+    // Skip entirely once a correctly named payload exists, so rebuilds need no network.
+    // Deliberately `onlyIf` rather than `outputs.dir(payloadDir)`: the payload lives in
+    // the source tree, and declaring it as a task output invites Gradle's stale-output
+    // cleanup to delete files there.
+    onlyIf {
+        payloadDir.listFiles()
+            ?.none { it.isFile && it.name.startsWith("lib") && it.name.endsWith(".so") } ?: true
+    }
+
+    commandLine("bash", script.absolutePath, abi)
+    // A missing engine must not look like a green build, but an offline dev should still
+    // get a usable error from verifyEnginePayload rather than a stack trace here.
+    isIgnoreExitValue = true
+    doLast {
+        val result = executionResult.get()
+        if (result.exitValue != 0) {
+            // ::warning:: surfaces this in CI annotations, where the raw log is often
+            // not reachable.
+            logger.warn(
+                "::warning::scripts/fetch-engine.sh failed (exit ${result.exitValue}). " +
+                    "The APK will have no PRoot engine unless you add it manually."
+            )
+        } else {
+            val staged = payloadDir.list()?.sorted().orEmpty()
+            logger.lifecycle("fetch-engine.sh staged: " + staged.joinToString())
+        }
+    }
+}
+
+val skipEngineFetch = providers.gradleProperty("skipEngineFetch").orNull == "true" ||
+    providers.environmentVariable("SKIP_ENGINE_FETCH").orNull == "1"
+
+val verifyEnginePayload by tasks.registering {
+    group = "verification"
+    description = "Fails the build when the PRoot engine payload is missing or misnamed."
+    if (!skipEngineFetch) dependsOn(fetchEnginePayload)
+    // Read through a provider so the task holds no Project reference at execution time
+    // (configuration-cache safe).
+    val dirs = enginePayloadDirs
+    val check = engineProblemsOf
+    val problems = provider { check(dirs) }
+    doLast {
+        val found = problems.get()
+        if (found.isNotEmpty()) {
+            throw org.gradle.api.GradleException(
+                "Engine payload check failed:\n  - " + found.joinToString("\n  - ") +
+                    "\nThe APK would install without a runnable engine and fail at START " +
+                    "with NATIVE_ENGINE_FAILED (see docs/DECISIONS.md ADR-022)."
+            )
+        }
+    }
+}
+
+val warnEnginePayload by tasks.registering {
+    description = "Warns (without failing) when a debug build has no usable engine payload."
+    if (!skipEngineFetch) dependsOn(fetchEnginePayload)
+    val dirs = enginePayloadDirs
+    val check = engineProblemsOf
+    val problems = provider { check(dirs) }
+    doLast { problems.get().forEach { logger.warn("WARNING: $it") } }
+}
+
+// The payload must exist before anything *reads* src/main/resources, not merely before
+// `assembleDebug` finishes: assemble is a lifecycle task and Gradle is free to run the
+// packaging tasks before any other dependency of it. Hooking the java-resource merge
+// and packaging tasks directly is what actually gets the engine into the APK.
+if (!skipEngineFetch) {
+    tasks.matching { task ->
+        task.name.contains("JavaRes") || task.name.matches(Regex("package(Debug|Release)"))
+    }.configureEach { dependsOn(fetchEnginePayload) }
+}
+
+// Release must never ship without an engine; debug only warns so UI work stays possible
+// offline (and debug builds do extract the historic unprefixed names anyway).
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }
+    .configureEach { dependsOn(verifyEnginePayload) }
+
+tasks.matching { it.name == "assembleDebug" }
+    .configureEach { dependsOn(warnEnginePayload) }
+
+/**
+ * Verifies the *built APK*, not the source tree.
+ *
+ * The source-tree checks above can pass while the APK still ends up without a usable
+ * engine (a packaging rule drops the payload, a file gets renamed, the fetch runs
+ * after packaging). `scripts/verify-apk-engine.sh` opens the real archive and asserts
+ * `lib/<abi>/` contains an entry Android will actually extract, emitting `::error::`
+ * so the reason shows up in CI annotations.
+ */
+val verifyApkEngine by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Asserts the built APK carries an extractable engine under lib/<abi>/."
+
+    val abi: String = engineAbis.first()
+    val script: File = rootProject.file("scripts/verify-apk-engine.sh")
+    val apkDir: File = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
+
+    onlyIf { apkDir.isDirectory }
+    commandLine("bash", script.absolutePath, apkDir.absolutePath, abi)
+}
+
+tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(verifyApkEngine) }
 
 /**
  * CI reads the console, not the HTML report, so a failing test has to explain itself there:

@@ -116,7 +116,7 @@ class NativeSetupTest {
         val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
 
         assertFalse(status.available)
-        assertTrue(status.reason!!.contains("resources/lib/arm64-v8a"))
+        assertTrue(status.reason!!.contains("jniLibs/arm64-v8a"))
     }
 
     @Test
@@ -130,7 +130,7 @@ class NativeSetupTest {
 
         val onDevice = EngineInstaller.ensureEngine(files, "arm64-v8a", null, isAndroid = true)
         assertFalse(onDevice.available)
-        assertTrue(onDevice.reason!!.contains("resources/lib/arm64-v8a"))
+        assertTrue(onDevice.reason!!.contains("jniLibs/arm64-v8a"))
 
         val onJvm = EngineInstaller.ensureEngine(files, "arm64-v8a", null, isAndroid = false)
         assertTrue(onJvm.available)
@@ -226,6 +226,73 @@ class NativeSetupTest {
         assertTrue(status.isReady)
         assertTrue(status.available)
         assertNull(status.reason)
+    }
+
+    // ---- APK extraction filter (ApkParsing.cpp / ValidLibraryPathLastSlash) ------
+
+    @Test
+    fun `every engine payload name survives Android's lib extraction filter`() {
+        // Android only extracts lib*.so entries from the APK's lib/<abi>/ on release
+        // builds, so a payload named `proot` or `libtalloc.so.2` never reaches the
+        // device. Every canonical name we ship must pass.
+        val shipped = listOf(
+            NativeSetup.PROOT,
+            NativeSetup.PROOT_LOADER,
+            NativeSetup.TINI,
+            NativeSetup.BUSYBOX,
+        ) + NativeSetup.BIONIC_DEPS.map { it.canonical }
+
+        shipped.forEach { name ->
+            assertTrue(
+                "$name would not be extracted by Android",
+                NativeSetup.isExtractablePayloadName(name),
+            )
+        }
+    }
+
+    @Test
+    fun `isExtractablePayloadName rejects the names that silently fail on device`() {
+        assertFalse(NativeSetup.isExtractablePayloadName("proot"))
+        assertFalse(NativeSetup.isExtractablePayloadName("loader"))
+        assertFalse(NativeSetup.isExtractablePayloadName("tini"))
+        // Versioned sonames fail too: the name must END with ".so".
+        assertFalse(NativeSetup.isExtractablePayloadName("libtalloc.so.2"))
+        // Unsafe characters are dropped by isFilenameSafe().
+        assertFalse(NativeSetup.isExtractablePayloadName("lib proot.so"))
+        assertTrue(NativeSetup.isExtractablePayloadName("libproot.so"))
+    }
+
+    @Test
+    fun `ensureEngine still accepts a legacy dev payload using the old names`() {
+        val files = tmp.newFolder("files_legacy_names")
+        val payload = tmp.newFolder("payload_legacy_names")
+        // A debug build (or an old checkout) extracts these unprefixed names.
+        payload.resolve("proot").writeBytes(
+            bionicElf(NativeSetup.EM_AARCH64, "/system/bin/linker64"),
+        )
+        payload.resolve("loader").writeBytes(staticElf(NativeSetup.EM_AARCH64))
+        payload.resolve("libtalloc.so.2").writeBytes(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))
+        payload.resolve(NativeSetup.LIB_ANDROID_SHMEM).writeBytes(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))
+
+        val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
+
+        assertTrue(status.isReady)
+        assertEquals(File(payload, "proot"), status.proot)
+        assertEquals(File(payload, "loader"), status.loader)
+    }
+
+    @Test
+    fun `missing engine explains that stray files were not named lib so`() {
+        val files = tmp.newFolder("files_stray")
+        val payload = tmp.newFolder("payload_stray")
+        // Present on disk in the repo, but Android never extracted them: not lib*.so.
+        payload.resolve("README.txt").writeText("engine goes here")
+
+        val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
+
+        assertFalse(status.available)
+        assertTrue(status.reason!!.contains("lib*.so"))
+        assertTrue(status.reason!!.contains("README.txt"))
     }
 
     private fun writeBionicDeps(payload: File) {

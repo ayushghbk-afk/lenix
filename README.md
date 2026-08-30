@@ -14,7 +14,7 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Guest launch is real: `ProotCommandBuilder` + `GuestRuntime` exec `proot -r rootfs -0`
   with the documented bind mounts; missing `proot` is `NATIVE_ENGINE_FAILED`, never a fake
   RUNNING demo
-- Engine payload ships in `app/src/main/resources/lib/<abi>/` (extracted to
+- Engine payload ships in `app/src/main/jniLibs/<abi>/` (extracted to
   `/data/app/.../lib/<abi>/`); `NativeSetup`/`EngineInstaller` validate the ELF and
   `execve` it from there — the only app-reachable spot Android 10+ SELinux allows
   (ADR-021; a `filesDir` copy fails with `error=13, Permission denied`);
@@ -107,9 +107,13 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked.
 The PRoot command line, PTY/pipe terminal and loopback RFB viewer are in the app; a
-device still needs the `proot` binary (plus its static `loader`) under
-`app/src/main/resources/lib/arm64-v8a/` before START can spawn a guest — run
-`./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. zstd layers wait
+device still needs the PRoot binary (plus its static loader) under
+`app/src/main/jniLibs/arm64-v8a/` before START can spawn a guest — run
+`./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. The payload is
+staged as `libproot.so` / `libprootloader.so` / `libtalloc.so`: Android only extracts
+`lib*.so` entries from an APK's `lib/<abi>/` on release builds, so anything else is
+packaged and then silently discarded (ADR-022). The Gradle build runs the script for
+you when the payload is missing — pass `-PskipEngineFetch=true` to build without it. zstd layers wait
 on `libpvmnative`; the pinned upstream layer is `tar.xz`.
 
 ## Runtime model
