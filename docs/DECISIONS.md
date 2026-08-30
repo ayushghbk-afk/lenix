@@ -167,21 +167,28 @@ entry. Per-instance progress lives in `instances/<id>/state.json`
 (`data.JsonInstallStateStore`, the checkpoint `ROOTFS_SYSTEM.md` §2 assigns to
 Phase 3), refreshed at phase changes and at least every 5 s, cleared on commit.
 
-v0.1 layer sourcing: the `rootfs.yml` workflow exports the official
-`debian:bookworm-slim` arm64 image (`docker pull`/`create`/`export` — nothing is
-executed, so no qemu is needed), xz-compresses it, publishes it as a GitHub
-Releases asset (Range-supported, ADR-011) and commits the generated manifest to
-`assets/rootfs/debian-bookworm-aarch64.json`, which the APK pins. The manifest
+v0.1 layer sourcing: no Lenix-owned layer host exists yet, so the bundled manifest
+(`assets/rootfs/debian-bookworm-aarch64.json`) pins a real Debian bookworm arm64
+rootfs published on GitHub Releases by `termux/proot-distro`
+(`debian-bookworm-aarch64-pd-v4.7.0.tar.xz`, ~43 MB). Its sha256 is pinned in the
+manifest — the same digest upstream verifies on every install — and the app
+re-verifies it over the downloaded bytes before anything is staged, so a swapped
+or corrupted asset can never pass. The layer is *downloaded at runtime*, not
+vendored into the APK (the guest is Debian's own licensed content plus proot-distro
+setup bits; attribution lives in `docs/ROOTFS_SYSTEM.md` §7). The manifest
 signature field is a documented `unsigned:phase-4` placeholder until Ed25519
-verification lands; integrity is already enforced by the sha256 gate. Real
-streaming extraction is Phase 5 — until then verified layers are staged into the
-instance directory.
+verification lands. `uncompressedBytes` for the borrowed layer is a conservative
+estimate used only for the storage precheck. Real streaming extraction is Phase 5 —
+until then verified layers are staged into the instance directory.
 
 **Consequences:** A completed layer is downloaded at most once per device, an
 interrupted install resumes at the exact byte it stopped, and tampered or truncated
 transfers can never reach extraction. The installer is file-based (no `Context`)
 and therefore fully JVM-testable against MockWebServer; OkHttp is the first new
-runtime dependency since Jackson.
+runtime dependency since Jackson. Building and hosting Lenix's own layers (the
+`rootfs.yml` builder — docker-export `debian:bookworm-slim`, xz, publish to this
+repo's Releases, regenerate the manifest) is the next step once workflow-file
+permissions allow it.
 
 ## ADR-016 — App settings: one `settings.json`, owned by the root view model (accepted)
 

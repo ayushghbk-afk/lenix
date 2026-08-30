@@ -18,9 +18,9 @@ data class DistroOption(
     val architecture: String,
     val enabled: Boolean,
     /**
-     * Bundled manifest asset (`app/src/main/assets/<path>`), kept fresh by the
-     * `rootfs.yml` workflow that publishes the layer to GitHub Releases. v0.1 has
-     * no remote channel yet — the APK pins the manifest it was built with.
+     * Bundled manifest asset (`app/src/main/assets/<path>`) pinned by this build.
+     * v0.1 has no remote channel yet — see docs/ROOTFS_SYSTEM.md §7 for how the
+     * layer referenced by the bundled manifest is sourced.
      */
     val manifestAsset: String? = null,
 )

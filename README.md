@@ -23,9 +23,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Interrupted installs really resume: process death or cancel leaves the
   `.part` + per-instance `state.json` checkpoint behind, and RESUME INSTALL
   continues where it stopped (the Home screen shows the interrupted percentage)
-- Real Debian bookworm arm64 layer published to GitHub Releases (Range-supported)
-  by the `rootfs.yml` workflow; the APK pins its manifest
-  (`assets/rootfs/debian-bookworm-aarch64.json`, sha256-verified on download)
+- Real Debian bookworm arm64 RootFS: the bundled manifest pins an upstream layer
+  hosted on GitHub Releases (`termux/proot-distro`'s bookworm aarch64 tarball,
+  Range-supported), downloaded and sha256-verified by the app — INSTALL on a device
+  genuinely works end to end
 - Fixed: settings now actually save — `filesDir/settings.json` via
   `JsonSettingsStore` (ADR-016), with the storage-care toggle gating a real
   free-space precheck before installs
