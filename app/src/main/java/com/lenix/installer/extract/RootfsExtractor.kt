@@ -443,8 +443,9 @@ class RootfsExtractor(
 
     /**
      * Applies the archive's permissions, normalized: the owner bits (shifted to apply to
-     * the app uid that owns everything here) and nothing else — no setuid, no setgid, no
-     * sticky bit, and directories always stay writable so extraction can continue.
+     * the app uid that owns everything here) and nothing else — group and other end up with
+     * no access at all, and setuid, setgid and the sticky bit are dropped. Directories are
+     * always kept writable and traversable so extraction and cleanup can continue.
      */
     private fun applyMode(target: File, mode: Int, directory: Boolean) {
         // Only the low 9 bits are permissions; tar archives also carry the file-type bits
@@ -454,6 +455,12 @@ class RootfsExtractor(
         val readable = ownerBits and 4 != 0 || directory
         val writable = ownerBits and 2 != 0 || directory
         val executable = ownerBits and 1 != 0 || directory
+        // Clear everyone first, then grant the owner: `File.set*(true, true)` only *adds*
+        // bits, so without this the archive's group/other permissions would survive into
+        // the RootFS (a 0644 member would stay group- and world-readable).
+        target.setReadable(false, false)
+        target.setWritable(false, false)
+        target.setExecutable(false, false)
         target.setReadable(readable, true)
         target.setWritable(writable, true)
         target.setExecutable(executable, true)

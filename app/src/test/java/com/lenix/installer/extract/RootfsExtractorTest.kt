@@ -15,6 +15,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 
 /**
  * Phase 5 extraction tests: a verified layer must become a *real* guest filesystem —
@@ -71,6 +72,20 @@ class RootfsExtractorTest {
         assertFalse(
             "etc/hostname permissions: ${Files.getPosixFilePermissions(File(root, "etc/hostname").toPath())}",
             File(root, "etc/hostname").canExecute(),
+        )
+        // The archive said 0644; the guest filesystem keeps the owner's bits and nothing
+        // else, so a packaged file can never end up readable by another uid.
+        assertEquals(
+            setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+            Files.getPosixFilePermissions(File(root, "etc/hostname").toPath()),
+        )
+        assertEquals(
+            setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE,
+            ),
+            Files.getPosixFilePermissions(File(root, "bin/sh").toPath()),
         )
         assertTrue(Files.isSymbolicLink(File(root, "bin/sh-link").toPath()))
         assertEquals(

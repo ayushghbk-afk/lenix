@@ -25,7 +25,7 @@ internal object TarFixtures {
     internal data class Entry(
         val name: String,
         val bytes: ByteArray = ByteArray(0),
-        val mode: Int = 0b111100100, // 0644
+        val mode: Int = 0b110_100_100, // 0644
         val directory: Boolean = false,
         val symlinkTo: String? = null,
         val hardLinkTo: String? = null,
