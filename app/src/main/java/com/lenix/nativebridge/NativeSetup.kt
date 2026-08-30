@@ -122,7 +122,10 @@ object NativeSetup {
         phEntSize: Int,
         phNum: Int,
     ): String? {
-        if (phNum !in 1..4096 || phEntSize < if (class64) 56 else 32 || phOff <= 0L) return null
+        // Hoist the if-expression: inline `a < if (x) 1 else 0 || b` is parsed as
+        // `a < (if (x) 1 else (0 || b))` (an Int || Boolean) — a compile error.
+        val interpEntSize = if (class64) 56 else 32
+        if (phNum !in 1..4096 || phEntSize < interpEntSize || phOff <= 0L) return null
         val phdr = ByteArray(phEntSize)
         for (i in 0 until phNum) {
             raf.seek(phOff + i.toLong() * phEntSize)
