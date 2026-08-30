@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lenix.pocketvm"
+    namespace = "com.lenix"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.lenix.pocketvm"
+        applicationId = "com.lenix"
         minSdk = 29
         targetSdk = 34
         versionCode = 1
@@ -81,6 +81,13 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // RootFS manifest parsing (JSON)
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.1")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.1")
+
+    // Local unit tests
+    testImplementation("junit:junit:4.13.2")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")

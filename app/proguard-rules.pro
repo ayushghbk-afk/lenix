@@ -5,5 +5,6 @@
 # Keep Compose
 -keep class androidx.compose.** { *; }
 
-# Keep data classes
--keep class com.lenix.pocketvm.data.** { *; }
+# Keep JSON / data classes
+-keep class com.lenix.installer.** { *; }
+-keep class com.lenix.vm.** { *; }

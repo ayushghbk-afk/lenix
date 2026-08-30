@@ -10,21 +10,29 @@ build/
 *.ipr
 *.iws
 local.properties
+captures/
 
 # Eclipse
 .classpath
 .project
 .settings/
 
-# Keystore
+# Keystore and signing material
 *.keystore
 *.jks
+*.p12
+*.pem
+*.key
+signing.properties
 
 # Generated files
 bin/
 gen/
+build/
+.externalNativeBuild
+.cxx
 
-# Output APK
+# Output APK / AAB
 *.apk
 *.aab
 *.ap_
@@ -42,7 +50,11 @@ Thumbs.db
 .env
 .env.local
 
-# Native (will be added later)
-native/
+# Native build artifacts (source lives under native/ and is tracked)
 *.o
 *.so
+*.a
+libs/
+dist/native-pkgs/
+dist/rootfs/layers/
+dist/rootfs/manifests/**.sig

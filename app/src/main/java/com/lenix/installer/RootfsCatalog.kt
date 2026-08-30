@@ -1,0 +1,65 @@
+package com.lenix.installer
+
+import com.lenix.vm.VmError
+import com.lenix.vm.VmException
+
+/**
+ * Product-scope catalog for v0.1.
+ *
+ * The implementation intentionally exposes Debian arm64 only. Ubuntu and Alpine rows
+ * remain visible in the installer UI but disabled until a later release, which keeps
+ * the first build "one distro, one ABI" as decided in docs/DECISIONS.md.
+ */
+data class DistroOption(
+    val id: String,
+    val displayName: String,
+    val codename: String,
+    val version: String,
+    val architecture: String,
+    val enabled: Boolean,
+)
+
+object RootfsCatalog {
+
+    const val SUPPORTED_ABI = "arm64-v8a"
+
+    private const val SUPPORTED_PRODUCT_ABI = "aarch64"
+
+    val options = listOf(
+        DistroOption(
+            id = "debian",
+            displayName = "Debian",
+            codename = "bookworm",
+            version = "12",
+            architecture = SUPPORTED_ABI,
+            enabled = true,
+        ),
+        DistroOption(
+            id = "ubuntu",
+            displayName = "Ubuntu",
+            codename = "noble",
+            version = "24.04",
+            architecture = SUPPORTED_ABI,
+            enabled = false,
+        ),
+        DistroOption(
+            id = "alpine",
+            displayName = "Alpine",
+            codename = "edge",
+            version = "3.20",
+            architecture = SUPPORTED_ABI,
+            enabled = false,
+        ),
+    )
+
+    fun selected(): DistroOption = options.first { it.enabled }
+
+    /**
+     * Reject ABIs before any network or storage work happens.
+     */
+    fun requireSupportedArchitecture(architecture: String) {
+        if (architecture != SUPPORTED_PRODUCT_ABI && architecture != SUPPORTED_ABI) {
+            throw VmException(VmError.UNSUPPORTED_ARCHITECTURE)
+        }
+    }
+}
