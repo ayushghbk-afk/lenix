@@ -12,9 +12,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,23 +25,26 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.lenix.data.LenixSettings
 
+/**
+ * App settings screen.
+ *
+ * Every toggle is backed by the persisted [LenixSettings] handed in from
+ * [com.lenix.ui.HomeViewModel] (filesDir/settings.json) — the screen itself keeps
+ * no local state, so values survive navigation, process death, and app restarts.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    settings: LenixSettings,
+    onUpdate: ((LenixSettings) -> LenixSettings) -> Unit,
     onBack: () -> Unit,
 ) {
-    var smartStorage by remember { mutableStateOf(true) }
-    var allowBackground by remember { mutableStateOf(false) }
-    var autoStartDesktop by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -61,30 +66,41 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SettingRow(
-                icon = Icons.Default.Settings,
+                icon = Icons.Default.Storage,
                 title = "Storage care",
                 subtitle = "Check free space before every install",
-                value = smartStorage,
-                onValueChange = { smartStorage = it },
+                value = settings.smartStorage,
+                onValueChange = { enabled ->
+                    onUpdate { it.copy(smartStorage = enabled) }
+                },
             )
             HorizontalDivider()
             SettingRow(
-                icon = Icons.Default.Settings,
+                icon = Icons.Default.Autorenew,
                 title = "Foreground service",
                 subtitle = "Keep the runtime alive in the background",
-                value = allowBackground,
-                onValueChange = { allowBackground = it },
+                value = settings.allowBackground,
+                onValueChange = { enabled ->
+                    onUpdate { it.copy(allowBackground = enabled) }
+                },
             )
             HorizontalDivider()
             SettingRow(
-                icon = Icons.Default.Settings,
+                icon = Icons.Default.DesktopWindows,
                 title = "Auto-start desktop",
                 subtitle = "Open Desktop screen after START",
-                value = autoStartDesktop,
-                onValueChange = { autoStartDesktop = it },
+                value = settings.autoStartDesktop,
+                onValueChange = { enabled ->
+                    onUpdate { it.copy(autoStartDesktop = enabled) }
+                },
             )
 
             Spacer(Modifier.padding(4.dp))
+            Text(
+                text = "Settings are saved automatically on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(
                 text = "Architecture: arm64-v8a only (v0.1)",
                 style = MaterialTheme.typography.bodySmall,
@@ -101,7 +117,7 @@ fun SettingsScreen(
 
 @Composable
 private fun SettingRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     subtitle: String,
     value: Boolean,

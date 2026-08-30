@@ -140,6 +140,74 @@ snapshot was renamed to `rootfs.json` so `config.json` unambiguously means the
 instance record from §7.3. The per-step `state.json` staging detail from
 `ROOTFS_SYSTEM.md` remains a Phase 3 concern layered on top of this record.
 
+## ADR-015 — Resumable downloader: OkHttp + `.part`/`.etag` sidecars + content-addressed cache (accepted)
+
+**Context:** Phase 3 needs the download step of `ROOTFS_SYSTEM.md` §2 to work on
+flaky mobile networks and to survive process death. `ARCHITECTURE.md` already pins
+"OkHttp on its own pool; `ResumableDownloader` writes to `cache/<sha>.part`".
+
+**Decision:** `data.download.ResumableDownloader` (OkHttp 4, no whole-call timeout)
+streams each layer into `filesDir/cache/layers/<sha256>.layer.part` and renames it
+to `<sha256>.layer` only after the full `sha256` matches the manifest. A partial is
+resumed with `Range: bytes=<n>-`; the ETag captured beside the `.part` is replayed
+as `If-Range`, so a changed upstream restarts from zero instead of concatenating
+mismatched bytes (the completion checksum is the second gate). Servers that ignore
+Range (plain 200), reject it (416), or resume at a wrong offset make the attempt
+restart cleanly; transient failures (I/O, short reads, 408/429/5xx) retry with
+exponential backoff (max 3 attempts) always resuming from disk. Coroutine
+cancellation is not an error: it leaves the `.part` in place — that is the resume
+point for the next install — and always surfaces as `CancellationException`, never
+a wrapped `VmError`. Explicit user cancel deletes in-flight `.part`s but keeps
+completed layers (immutable, content-addressed, shared across instances).
+
+The cache key is the bare sha256 with a fixed `.layer` suffix (not
+`<sha>.tar.zst`): the digest is validated before it is used as a filename, and one
+canonical name per digest means two URLs serving the same content share one cache
+entry. Per-instance progress lives in `instances/<id>/state.json`
+(`data.JsonInstallStateStore`, the checkpoint `ROOTFS_SYSTEM.md` §2 assigns to
+Phase 3), refreshed at phase changes and at least every 5 s, cleared on commit.
+
+v0.1 layer sourcing: the `rootfs.yml` workflow exports the official
+`debian:bookworm-slim` arm64 image (`docker pull`/`create`/`export` — nothing is
+executed, so no qemu is needed), xz-compresses it, publishes it as a GitHub
+Releases asset (Range-supported, ADR-011) and commits the generated manifest to
+`assets/rootfs/debian-bookworm-aarch64.json`, which the APK pins. The manifest
+signature field is a documented `unsigned:phase-4` placeholder until Ed25519
+verification lands; integrity is already enforced by the sha256 gate. Real
+streaming extraction is Phase 5 — until then verified layers are staged into the
+instance directory.
+
+**Consequences:** A completed layer is downloaded at most once per device, an
+interrupted install resumes at the exact byte it stopped, and tampered or truncated
+transfers can never reach extraction. The installer is file-based (no `Context`)
+and therefore fully JVM-testable against MockWebServer; OkHttp is the first new
+runtime dependency since Jackson.
+
+## ADR-016 — App settings: one `settings.json`, owned by the root view model (accepted)
+
+**Context:** The Settings screen kept its three toggles in
+`remember { mutableStateOf(...) }` — local UI state — so every value was lost on
+navigation or process death ("settings not saving"). The obvious fixes are
+`SharedPreferences`/DataStore, but the settings are three booleans with no
+cross-process access and no observed types.
+
+**Decision:** Persist a versioned `SettingsRecord` to `filesDir/settings.json` via
+`data.JsonSettingsStore` — the same wire-format rules as the other JSON stores
+(atomic temp-file + rename, unknown fields ignored, corrupt/newer-schema loads as
+documented defaults, plain `File` constructor for JVM tests). One owner:
+`HomeViewModel` loads the settings at construction, updates its state flow
+optimistically, and serializes disk writes on the manager dispatcher. Screens stay
+stateless and receive `(LenixSettings, onUpdate)` — the same
+single-source-of-truth pattern as the instance list. The storage-care toggle is
+wired to a real free-space precheck before installs (`StatFs`; required ≈ Σ
+compressed + 1.2 × Σ uncompressed, `ROOTFS_SYSTEM.md` §4); the background-runtime
+and desktop auto-start toggles are consumed by the Phase 6/7 features they name.
+
+**Consequences:** Settings survive restarts by construction and are unit-testable
+without Android. DataStore/SharedPreferences stay out until a real need appears
+(observed types, cross-process access); migrating a 3-field JSON record then is
+trivial.
+
 ---
 
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

@@ -8,3 +8,4 @@
 # Keep JSON / data classes
 -keep class com.lenix.installer.** { *; }
 -keep class com.lenix.vm.** { *; }
+-keep class com.lenix.data.** { *; }

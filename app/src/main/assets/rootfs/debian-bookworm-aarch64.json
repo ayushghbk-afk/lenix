@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "debian-bookworm-aarch64",
+  "distro": "debian",
+  "codename": "bookworm",
+  "arch": "aarch64",
+  "version": "0.1.0",
+  "channel": "stable",
+  "releasedAt": "2026-08-30T00:00:00Z",
+  "compatibility": {
+    "minAndroidSdk": 29,
+    "minRamMb": 2048,
+    "recommendedRamMb": 4096
+  },
+  "desktop": {
+    "default": "openbox",
+    "flavors": [ "openbox" ]
+  },
+  "layers": [
+    {
+      "id": "base",
+      "url": "https://github.com/ayushghbk-afk/lenix/releases/download/rootfs-v0.1/debian-bookworm-aarch64-base.tar.xz",
+      "sizeBytes": 24000000,
+      "uncompressedBytes": 76000000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "compression": "xz"
+    }
+  ],
+  "install": {
+    "estimatedFreeGb": 0.2,
+    "bootCommand": "/bin/bash"
+  },
+  "buildinfoUrl": "https://github.com/ayushghbk-afk/lenix/releases/tag/rootfs-v0.1",
+  "signature": "unsigned:phase-4"
+}

@@ -77,6 +77,19 @@ is not worth the complexity). Killed during commit → the atomic rename guarant
 either a complete rootfs or nothing.
 
 **Cancel/delete:** user cancels → delete `.tmp`, `.part`, release reservation.
+Completed layers stay in the content-addressed cache — they are immutable and
+verified, so the next attempt reuses them.
+
+**Implementation status (Phase 3):** steps [1]–[3] and [6]–[7] are implemented in
+`installer.RootfsInstaller` + `data.download.ResumableDownloader` (ADR-015).
+Differences from the sketch above, all recorded in ADR-015: cache files are named
+`cache/layers/<sha256>.layer` (one canonical name per digest), ETags are persisted
+as `<sha256>.layer.etag` sidecars for `If-Range`-validated resume across process
+death, download progress checkpoints live in `instances/<id>/state.json`
+(`data.JsonInstallStateStore`), and steps [4]–[5] are a staging stub — verified
+layers are copied into `instances/<id>/rootfs/` until real streaming extraction
+(Phase 5) and the guest bootstrap (later phases) land. The v0.1 layer is produced
+and published by `.github/workflows/rootfs.yml` (see §7).
 
 ---
 
@@ -208,6 +221,16 @@ rootfs.yml  (on push to dist/rootfs/builder, cron weekly, manual dispatch)
 Reproducibility goal: same builder commit ⇒ identical layer `sha256` for the same
 package versions (achieved with pinning + `SOURCE_DATE_EPOCH`; exact-identical is
 nice-to-have, verify-by-hash is mandatory either way).
+
+**Implementation status (v0.1):** `.github/workflows/rootfs.yml` is the seed of
+this pipeline — a single layer, built from the official `debian:bookworm-slim`
+arm64 image (`docker pull`/`create`/`export`; nothing executes on the runner, so
+no qemu/binfmt is needed), xz-compressed, published as a GitHub Releases asset
+under the stable tag `rootfs-v0.1`, with the generated manifest committed to
+`app/src/main/assets/rootfs/debian-bookworm-aarch64.json` so the APK pins its
+layer. The mmdebstrap/desktop/minisign stages above replace it in later phases;
+the manifest schema, cache layout, and checksum gate it produces are already the
+production ones.
 
 ## 8. Offline / "Install from file" (Phase 4)
 

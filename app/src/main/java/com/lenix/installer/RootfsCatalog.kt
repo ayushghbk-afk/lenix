@@ -17,6 +17,12 @@ data class DistroOption(
     val version: String,
     val architecture: String,
     val enabled: Boolean,
+    /**
+     * Bundled manifest asset (`app/src/main/assets/<path>`), kept fresh by the
+     * `rootfs.yml` workflow that publishes the layer to GitHub Releases. v0.1 has
+     * no remote channel yet — the APK pins the manifest it was built with.
+     */
+    val manifestAsset: String? = null,
 )
 
 object RootfsCatalog {
@@ -33,6 +39,7 @@ object RootfsCatalog {
             version = "12",
             architecture = SUPPORTED_ABI,
             enabled = true,
+            manifestAsset = "rootfs/debian-bookworm-aarch64.json",
         ),
         DistroOption(
             id = "ubuntu",

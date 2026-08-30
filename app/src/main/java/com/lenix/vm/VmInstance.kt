@@ -39,8 +39,9 @@ data class VmInstance(
          * the app, and an in-flight install has no worker left. Anything that was
          * starting/running/stopping becomes READY again (the RootFS is installed and
          * the process is simply gone), and an interrupted install becomes ERROR with
-         * [VmError.INSTALL_INTERRUPTED] so the UI can offer retry/reset. Phase 3's
-         * resumable downloader will turn this into real install resumption instead.
+         * [VmError.INSTALL_INTERRUPTED] so the UI can offer a RESUME — the Phase 3
+         * installer picks the download back up from the layer cache and any
+         * `.part` file instead of restarting from zero.
          */
         fun recoveredForAppRestart(instance: VmInstance): VmInstance = when (instance.state) {
             VmState.DOWNLOADING,

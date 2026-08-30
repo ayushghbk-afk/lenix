@@ -1,0 +1,129 @@
+name: RootFS layer
+
+# Builds and publishes the Debian bookworm arm64 RootFS layer that the app
+# downloads (docs/ROOTFS_SYSTEM.md). v0.1 seed builder: the layer is the official
+# debian:bookworm-slim arm64 image exported with docker(1) — no execution happens
+# on the runner, so no qemu/binfmt is needed. The full builder pipeline
+# (mmdebstrap + desktop layer + minisign, ROOTFS_SYSTEM.md §7) replaces this in a
+# later phase; the manifest schema and cache layout it produces are already the
+# production ones.
+#
+# The generated manifest is committed back to the triggering branch so the APK
+# built from it pins the exact layer URL + sha256. The release tag intentionally
+# stays put once created: layer assets are immutable and content-addressed, and
+# re-runs replace the asset under the same name/URL.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/rootfs.yml"
+      - "app/src/main/assets/rootfs/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rootfs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-layer:
+    name: Build and publish the Debian arm64 layer
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: "debian:bookworm-slim"
+      IMAGE_PLATFORM: "linux/arm64"
+      RELEASE_TAG: "rootfs-v0.1"
+      LAYER_FILE: "debian-bookworm-aarch64-base.tar.xz"
+      MANIFEST_PATH: "app/src/main/assets/rootfs/debian-bookworm-aarch64.json"
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Export the Debian arm64 rootfs
+        run: |
+          set -euo pipefail
+          docker pull --platform "$IMAGE_PLATFORM" "$IMAGE"
+          container="$(docker create --platform "$IMAGE_PLATFORM" "$IMAGE")"
+          docker export --output rootfs.tar "$container"
+          docker rm "$container" >/dev/null
+          xz -9 -T0 --stdout rootfs.tar > "$LAYER_FILE"
+          ls -lh rootfs.tar "$LAYER_FILE"
+
+      - name: Generate the layer manifest
+        run: |
+          set -euo pipefail
+          size_bytes="$(stat -c%s "$LAYER_FILE")"
+          uncompressed_bytes="$(stat -c%s rootfs.tar)"
+          layer_sha256="$(sha256sum "$LAYER_FILE" | cut -d' ' -f1)"
+          # required free ≈ compressed layer + 1.2 × uncompressed (ROOTFS_SYSTEM.md §4)
+          total_bytes=$(( size_bytes + uncompressed_bytes * 6 / 5 ))
+          tenths=$(( (total_bytes + 99999999) / 100000000 ))
+          estimated_free_gb="$(( tenths / 10 )).$(( tenths % 10 ))"
+          echo "layer sha256: $layer_sha256"
+          jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" \
+            --arg layer "$LAYER_FILE" \
+            --arg released "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg sha "$layer_sha256" \
+            --argjson size "$size_bytes" \
+            --argjson uncompressed "$uncompressed_bytes" \
+            --argjson estimated "$estimated_free_gb" \
+            '{
+              schemaVersion: 1,
+              id: "debian-bookworm-aarch64",
+              distro: "debian",
+              codename: "bookworm",
+              arch: "aarch64",
+              version: "0.1.0",
+              channel: "stable",
+              releasedAt: $released,
+              compatibility: { minAndroidSdk: 29, minRamMb: 2048, recommendedRamMb: 4096 },
+              desktop: { default: "openbox", flavors: ["openbox"] },
+              layers: [{
+                id: "base",
+                url: ("https://github.com/" + $repo + "/releases/download/" + $tag + "/" + $layer),
+                sizeBytes: $size,
+                uncompressedBytes: $uncompressed,
+                sha256: $sha,
+                compression: "xz"
+              }],
+              install: { estimatedFreeGb: $estimated, bootCommand: "/bin/bash" },
+              buildinfoUrl: ("https://github.com/" + $repo + "/releases/tag/" + $tag),
+              signature: "unsigned:phase-4"
+            }' > "$MANIFEST_PATH"
+          cat "$MANIFEST_PATH"
+
+      - name: Publish the layer to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "RootFS layers v0.1 — Debian bookworm arm64"
+          files: ${{ env.LAYER_FILE }}
+          fail_on_unmatched_files: true
+          body: |
+            Immutable RootFS layer assets downloaded by the Lenix app
+            (Range-supported, content-addressed by sha256 in the bundled manifest).
+
+            - `debian-bookworm-aarch64-base.tar.xz` — `debian:bookworm-slim`
+              (linux/arm64), exported and xz-compressed by `.github/workflows/rootfs.yml`.
+
+      - name: Commit the refreshed manifest
+        run: |
+          set -euo pipefail
+          git config user.name "lenix-rootfs-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST_PATH"
+          if git diff --cached --quiet; then
+            echo "Manifest unchanged; nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(rootfs): publish Debian bookworm arm64 layer for $RELEASE_TAG"
+          # checkout@v4 leaves a detached HEAD; fetch+rebase onto the branch tip in
+          # case it moved while this job was building.
+          git fetch origin "${GITHUB_REF}"
+          git rebase FETCH_HEAD
+          git push origin "HEAD:${GITHUB_REF}"

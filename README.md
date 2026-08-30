@@ -9,6 +9,29 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 ## Status
 
+**Phase 3 — Resumable RootFS downloader (and the settings fix)**
+
+- Real install pipeline: bundled manifest → download → verify → stage → commit,
+  driven by `data.download.ResumableDownloader` (ADR-015)
+- HTTP `Range` resume from byte-exact `.part` files, with ETag/`If-Range`
+  validation so changed upstream content restarts instead of corrupting
+- Content-addressed layer cache at `filesDir/cache/layers/<sha256>.layer`,
+  shared across instances and retries: a layer is downloaded at most once
+- Retry with exponential backoff for transient failures (I/O, short reads,
+  408/429/5xx); checksum gate before anything is trusted; 416 and
+  range-ignoring servers handled by clean restart
+- Interrupted installs really resume: process death or cancel leaves the
+  `.part` + per-instance `state.json` checkpoint behind, and RESUME INSTALL
+  continues where it stopped (the Home screen shows the interrupted percentage)
+- Real Debian bookworm arm64 layer published to GitHub Releases (Range-supported)
+  by the `rootfs.yml` workflow; the APK pins its manifest
+  (`assets/rootfs/debian-bookworm-aarch64.json`, sha256-verified on download)
+- Fixed: settings now actually save — `filesDir/settings.json` via
+  `JsonSettingsStore` (ADR-016), with the storage-care toggle gating a real
+  free-space precheck before installs
+- Unit tests for the downloader (MockWebServer: resume, ETag, 416, retry,
+  cancellation), the full installer pipeline, and the new stores
+
 **Phase 2 — Instance manager and local persistence**
 
 - Multi-instance manager: create / rename / delete instances with slug ids, unique
@@ -18,7 +41,7 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Every state transition is persisted (ADR-012); instances survive app restarts
 - Crash recovery: transient states never survive a process restart — a running guest
   becomes `READY` again, an interrupted install becomes `ERROR` +
-  `INSTALL_INTERRUPTED` (retryable until the resumable downloader lands in Phase 3)
+  `INSTALL_INTERRUPTED` (retryable; since Phase 3 the retry resumes the download)
 - Selected instance is remembered across restarts (`selected_instance` file)
 - Functional Instance Manager screen: per-row state, on-disk size, rename, delete,
   create dialog driven by the distro catalog
@@ -37,7 +60,9 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Local fake installer for UI testing
 - Unit tests for package `vm` and `installer`
 
-The actual PRoot engine, RootFS downloader, PTY, and VNC viewer are the next phases.
+The actual PRoot engine, PTY, and VNC viewer are the next phases (extraction of
+the downloaded layers is Phase 5; until then a verified layer is staged into the
+instance directory).
 
 ## Runtime model
 
@@ -132,7 +157,10 @@ app/src/main/java/com/lenix/
 │       └── SettingsScreen.kt
 ├── vm/                 # state machine, VmManager, instance/process abstractions
 ├── installer/          # RootFS manifest, verifier, catalog, installer
-├── data/               # local persistence: config.json instance store, selection
+├── data/               # local persistence: config.json instance store, selection,
+│   ├── SettingsStore.kt      # settings.json (the settings-savings fix)
+│   ├── InstallStateStore.kt  # per-instance state.json install checkpoints
+│   └── download/             # ResumableDownloader + content-addressed LayerCache
 ├── domain/             # models and usecases (next phase)
 └── native/             # NativeBridge (next phase)
 ```
@@ -183,7 +211,7 @@ PROCESS_CRASHED, VNC_CONNECTION_FAILED
 - [x] **Phase 0** — design docs and repo structure
 - [x] **Phase 1** — Android project foundation, Compose UI, state machine, manifest parser
 - [x] **Phase 2** — instance manager and local persistence
-- [ ] **Phase 3** — resumable RootFS downloader
+- [x] **Phase 3** — resumable RootFS downloader
 - [ ] **Phase 4** — checksum + signature verification
 - [ ] **Phase 5** — RootFS extraction
 - [ ] **Phase 6** — native engine (PRoot) + terminal
