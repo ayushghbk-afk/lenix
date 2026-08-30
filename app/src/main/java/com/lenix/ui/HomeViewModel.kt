@@ -19,6 +19,7 @@ import com.lenix.vm.VmException
 import com.lenix.vm.VmInstance
 import com.lenix.vm.VmManager
 import com.lenix.vm.VmState
+import com.lenix.vm.isBusy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -154,7 +155,7 @@ class HomeViewModel(
         if (mutableHomeState.value.settings.smartStorage) {
             val required = requiredBytesFor(manifest)
             val available = availableBytes()
-            if (available in 0 until required) {
+            if (available >= 0 && available < required) {
                 message(
                     "Not enough free storage: need about ${formatBytes(required)}, " +
                         "only ${formatBytes(available)} available.",
