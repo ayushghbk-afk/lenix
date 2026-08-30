@@ -167,18 +167,20 @@ pinned in the bundled manifest (see §7).
 The app pins the channel URL + public key; the manifest tells it everything else
 (URLs, sizes, hashes, DE options, RAM requirements).
 
-**As implemented (Phases 3–5).** `RootfsManifestParser` rejects anything the installer would
-have to guess about: `schemaVersion` must be the supported one, `id`/`distro`/`version` and
-`install.bootCommand` must be non-blank, 1–8 layers with unique ids, `https:`-only URLs, a
-normalized 64-hex `sha256` (lowercase accepted, `Digests.isSha256Hex`), a compression the
-layer's suffix agrees with, and `sizeBytes > 0` with `uncompressedBytes ≥ sizeBytes`.
-`signingKeyVersion` is advisory — trust comes from the key id inside `signature`, which must
-name a key in the ring (a mismatch is reported with both key ids, never silently).
+**As implemented (Phases 3–5).** `RootfsManifestParser` rejects anything the installer
+would have to guess about: `schemaVersion` must be the supported one,
+`id`/`distro`/`version` and `install.bootCommand` must be non-blank, 1–8 layers with
+unique ids, and a `https:` URL (`http:` only for a loopback host — how the JVM tests
+serve archives and how a developer mirrors a candidate RootFS locally), a normalized
+64-hex `sha256` (lowercase accepted, `Digests.isSha256Hex`), a compression the layer's
+suffix agrees with, and `sizeBytes > 0` with `uncompressedBytes ≥ sizeBytes`.
+`signingKeyVersion` is advisory — trust comes from the key id inside `signature`, which
+must name a key in the ring (a mismatch is reported with both key ids, never silently).
 `signature` is `ed25519:` + base64(`key-id ‖ signature`) over the canonical payload
-(`RootfsManifestCanonicalizer`, byte-for-byte mirrored by `scripts/canonical-json.py`), and a
-document that is unsigned, placeholder-signed, signed by an untrusted key or whose canonical
-form was altered verifies as `SIGNATURE_FAILED`. The `signature` member is excluded from the
-payload, so re-signing never invalidates itself.
+(`RootfsManifestCanonicalizer`, byte-for-byte mirrored by `scripts/canonical-json.py`),
+and a document that is unsigned, placeholder-signed, signed by an untrusted key or whose
+canonical form was altered verifies as `SIGNATURE_FAILED`. The `signature` member is
+excluded from the payload, so re-signing never invalidates itself.
 
 ## 4. Storage layout & accounting
 

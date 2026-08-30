@@ -63,7 +63,7 @@ class RootfsManifestParser(
         manifest.layers.forEach { layer ->
             require(layer.id.isNotBlank()) { "A layer has no id." }
             require(seen.add(layer.id)) { "Layer id '${layer.id}' appears twice in the manifest." }
-            require(layer.url.startsWith("https://")) {
+            require(isTransportSecure(layer.url)) {
                 "Layer ${layer.id} would be downloaded over an insecure URL: ${layer.url}"
             }
             require(layer.sizeBytes > 0L) { "Layer ${layer.id} has no size." }
@@ -84,6 +84,22 @@ class RootfsManifestParser(
         require(manifest.install.bootCommand.isNotBlank()) {
             "Manifest ${manifest.id} has no boot command."
         }
+    }
+
+    /**
+     * True when a layer would not be downgraded on the wire.
+     *
+     * `https:` is required for everything a device can actually be sent. `http:` is
+     * tolerated *only* for a loopback host: that is how the unit tests serve archives, and
+     * it lets a developer mirror a candidate RootFS from their own machine. It cannot
+     * become a network-wide hole — no release manifest can name a loopback URL, and even
+     * then the signed digest, not the transport, is what decides whether bytes are trusted.
+     */
+    private fun isTransportSecure(url: String): Boolean {
+        if (url.startsWith("https://")) return true
+        if (!url.startsWith("http://")) return false
+        val host = url.substringAfter("http://").substringBefore('/').substringBefore(':').lowercase()
+        return host == "localhost" || host == "::1" || host == "0.0.0.0" || host.startsWith("127.")
     }
 
     companion object {
