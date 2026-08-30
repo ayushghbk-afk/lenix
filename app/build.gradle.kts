@@ -1,5 +1,9 @@
 plugins {
     id("com.android.application")
+    // Required with AGP 9 built-in Kotlin: AGP does not wire the Compose
+    // compiler itself. Version 2.2.10 matches the Kotlin compiler embedded in
+    // AGP 9.3.2 (see its POM: kotlin-gradle-plugin 2.2.10).
+    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10"
 }
 
 android {
