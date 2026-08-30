@@ -9,6 +9,19 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 ## Status
 
+**Phases 6 + 7 — PRoot engine, terminal, Openbox + VNC**
+
+- Guest launch is real: `ProotCommandBuilder` + `GuestRuntime` exec `proot -r rootfs -0`
+  with the documented bind mounts; missing `proot` is `NATIVE_ENGINE_FAILED`, never a fake
+  RUNNING demo
+- First-run `NativeSetup` copies `assets/native/<abi>/` → `filesDir/native/<abi>/` (W^X);
+  `NativeBridge` loads optional `libpvmnative.so` for `openpty` / `killpg`
+- Terminal is a live `PtySession` on the guest stdio (line-mode fallback when no PTY)
+- Desktop: allocate loopback RFB port 5901–5999, start `Xvnc` + `openbox-session` inside
+  the guest, connect with a pure-Kotlin RFB 3.8 client (Raw encoding, tap → pointer)
+- Settings toggles now do what they say: foreground service while running, auto-open Desktop
+- Unit tests for argv, native copy, RFB handshake/decode, and the launch/stop lifecycle
+
 **Phases 4 + 5 — Manifest signatures and real RootFS extraction**
 
 - Manifest trust gate: every manifest — bundled or fetched — must carry an Ed25519
@@ -89,10 +102,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Local fake installer for UI testing
 - Unit tests for package `vm` and `installer`
 
-Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked;
-the actual PRoot engine, PTY and VNC viewer are the next phases. zstd layers — the format
-Lenix's own builder will publish — are read once the native extractor lands in Phase 6, and
-until then the pinned upstream layer ships as `tar.xz`.
+Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked.
+The PRoot command line, PTY/pipe terminal and loopback RFB viewer are in the app; a
+device still needs the `proot` binary under `assets/native/arm64-v8a/` before START can
+spawn a guest. zstd layers wait on `libpvmnative`; the pinned upstream layer is `tar.xz`.
 
 ## Runtime model
 
@@ -203,8 +216,9 @@ app/src/main/java/com/lenix/
 │   ├── SettingsStore.kt      # settings.json (the settings-savings fix)
 │   ├── InstallStateStore.kt  # per-instance state.json install checkpoints
 │   └── download/             # ResumableDownloader + content-addressed LayerCache
-├── domain/             # models and usecases (next phase)
-└── native/             # NativeBridge (next phase)
+├── nativebridge/       # NativeSetup + optional JNI (openpty)
+├── vnc/                # RFB 3.8 client (loopback, Raw)
+└── vm/launch + vm/pty + vm/service
 ```
 
 ### State machine
@@ -257,8 +271,8 @@ VNC_CONNECTION_FAILED
 - [x] **Phase 3** — resumable RootFS downloader
 - [x] **Phase 4** — checksum + signature verification
 - [x] **Phase 5** — RootFS extraction
-- [ ] **Phase 6** — native engine (PRoot) + terminal
-- [ ] **Phase 7** — Openbox desktop + built-in VNC viewer
+- [x] **Phase 6** — native engine (PRoot) + terminal
+- [x] **Phase 7** — Openbox desktop + built-in VNC viewer
 
 ## License
 

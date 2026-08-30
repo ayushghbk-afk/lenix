@@ -319,4 +319,37 @@ load-bearing).
 
 ---
 
+## ADR-019 — Guest launch: ProcessBuilder PRoot, JNI optional (accepted)
+
+**Context:** Phase 6 has to start a Linux userspace. Linking `proot` into the APK would
+GPL-taint the app (ARCHITECTURE.md §16.2). `/dev/ptmx` is not guaranteed.
+
+**Decision:** `ProotGuestEngine` execs `filesDir/native/<abi>/proot` via `ProcessBuilder`
+with the documented `-r -0 -b` argv (`ProotCommandBuilder`). `NativeSetup` copies
+assets there on first launch. `libpvmnative.so` is optional (`NativeBridge.tryLoad`);
+the terminal uses pipe-backed stdio (`PtySession`) until `openpty` is present.
+Missing `proot` is `NATIVE_ENGINE_FAILED`, never a fake RUNNING state. A
+`VmRuntimeService` specialUse FGS is started when the background-runtime setting is on.
+
+**Consequences:** Unit tests inject a `GuestEngine`. Shipping a real guest still needs
+the arm64 `proot` binary dropped into assets; the command line, session lifecycle and
+terminal I/O are otherwise complete.
+
+## ADR-020 — Desktop: Openbox + loopback RFB 3.8 Raw client (accepted)
+
+**Context:** Phase 7 must show a desktop inside the app (ADR-003/004/008). Tight/ZRLE
+can wait; a handshake that cannot be tested on the JVM cannot ship.
+
+**Decision:** Desktop launch is the same PRoot tree with an inner `sh -c` that starts
+`Xvnc -localhost -rfbport <port> -SecurityTypes None` then `openbox-session`. The app
+allocates 5901–5999, writes a 12-hex password file (for later VNC-Auth), and
+`RfbClient` speaks RFB 3.8 on `127.0.0.1` only, decoding Raw 32-bpp into an ARGB
+`Bitmap` shown by `DesktopScreen`. Auto-start desktop (ADR-016) navigates there after
+START. Tight/JPEG is a later encoding behind the same client.
+
+**Consequences:** The protocol is JVM-tested with a scripted server. A Debian layer
+without Xvnc/Openbox will retry then surface `VNC_CONNECTION_FAILED` instead of hanging.
+
+---
+
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

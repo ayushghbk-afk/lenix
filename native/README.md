@@ -1,16 +1,23 @@
 # Lenix Native
 
-Native engine source tree (PRoot, BusyBox, PTY helper, extractor) will live here.
+Host-side engine (PRoot, BusyBox, PTY helper, extractor). GPL binaries are
+**executed**, never linked (ADR-001). `libpvmnative.so` is Apache-2.0 JNI for
+`openpty` and process-group kill.
 
-No native code is vendored yet, and Phases 0–5 never needed any: the installer, its
-signature check (`ed25519` via the JDK) and RootFS extraction (`commons-compress` +
-`org.tukaani:xz`) all run in the JVM — see ADR-017/ADR-018. The tree grows with the
-phases in `README.md` that do need it:
+## Layout
 
-- Phase 6 — `launcher/` (PRoot), `pty/` (PTY bridge), `extractor/` (libarchive + zstd, the
-  fast path and the only reader for `tar.zst` layers), behind `NativeBridge`
-- Phase 7 — desktop/VNC plumbing, if any turns out to need native helpers
+```
+native/
+├── CMakeLists.txt      # libpvmnative (pty + launcher)
+├── pty/pty.c
+├── launcher/launcher.c
+└── README.md
+```
 
-`docs/NATIVE_BINARIES.md` tracks each binary, its provenance and license; until a `.so` is
-built, the app degrades with `NATIVE_ENGINE_FAILED` / `UNSUPPORTED_COMPRESSION` rather than
-pretending to work.
+`proot` / `tini` / `busybox` are not vendored in this tree yet. Drop arm64-v8a
+builds into `app/src/main/assets/native/arm64-v8a/` and [NativeSetup] copies
+them to `filesDir/native/<abi>/` on first launch. Until those files exist, START
+fails as `NATIVE_ENGINE_FAILED` instead of pretending a guest is running.
+
+Phase 6: PRoot argv + PTY/pipe terminal + JNI stubs.
+Phase 7: Openbox + Xvnc launch line + loopback RFB client (Raw encoding).

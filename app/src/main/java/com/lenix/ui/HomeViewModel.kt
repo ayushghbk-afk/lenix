@@ -22,12 +22,15 @@ import com.lenix.vm.VmInstance
 import com.lenix.vm.VmManager
 import com.lenix.vm.VmState
 import com.lenix.vm.isBusy
+import com.lenix.vm.launch.GuestRuntime
+import com.lenix.vm.launch.GuestSession
+import com.lenix.vm.service.VmRuntimeService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +46,7 @@ data class HomeUiState(
     val installProgress: InstallProgress = InstallProgress.Inactive,
     val settings: LenixSettings = LenixSettings(),
     val message: String? = null,
+    val navigateTo: String? = null,
 ) {
     data class InstallProgress(
         val state: VmState? = null,
@@ -89,6 +93,10 @@ class HomeViewModel(
         filesDir = application.filesDir,
         manifestVerifier = manifestVerifier,
         extractor = RootfsExtractor(freeBytes = { freeBytesOn(application.filesDir) }),
+    ),
+    private val guestRuntime: GuestRuntime = GuestRuntime(
+        filesDir = application.filesDir,
+        manager = vmManager,
     ),
 ) : AndroidViewModel(application) {
 
@@ -235,11 +243,34 @@ class HomeViewModel(
     fun start() {
         val id = mutableHomeState.value.selectedInstance.id
         if (vmManager.getInstance(id) == null) return
+        val desktop = mutableHomeState.value.settings.autoStartDesktop
+        val background = mutableHomeState.value.settings.allowBackground
         viewModelScope.launch(vmDispatcher) {
-            vmManager.start(id)
-            delay(1200)
-            vmManager.markRunning(id)
-            message("Linux environment is running (demo; the PRoot engine lands in Phase 6).")
+            try {
+                guestRuntime.start(id, desktop = desktop)
+                if (background) {
+                    VmRuntimeService.start(getApplication())
+                }
+                val dest = when {
+                    desktop -> Routes.DESKTOP
+                    else -> Routes.TERMINAL
+                }
+                mutableHomeState.update { state ->
+                    state.copy(
+                        message = if (desktop) {
+                            "Openbox session starting — connecting the built-in VNC viewer."
+                        } else {
+                            "Linux shell is running. Open the terminal to type commands."
+                        },
+                        navigateTo = dest,
+                    )
+                }
+            } catch (e: VmException) {
+                message(e.message ?: "Could not start the Linux environment.")
+            } catch (e: Exception) {
+                vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
+                message(e.message ?: "Could not start the Linux environment.")
+            }
         }
     }
 
@@ -247,12 +278,24 @@ class HomeViewModel(
         val id = mutableHomeState.value.selectedInstance.id
         if (vmManager.getInstance(id) == null) return
         viewModelScope.launch(vmDispatcher) {
-            vmManager.stop(id)
-            delay(600)
-            vmManager.markStopped(id)
+            try {
+                guestRuntime.stop(id)
+            } catch (_: Exception) {
+                vmManager.markStopped(id)
+            }
+            VmRuntimeService.stop(getApplication())
             mutableHomeState.update { state -> state.copy(message = null) }
         }
     }
+
+    fun guestSession(): GuestSession? =
+        guestRuntime.session(mutableHomeState.value.selectedInstance.id)
+
+    fun consumeNavigation() {
+        mutableHomeState.update { state -> state.copy(navigateTo = null) }
+    }
+
+    fun vncPort(): Int? = guestRuntime.session(mutableHomeState.value.selectedInstance.id)?.vncPort
 
     fun reset() {
         val id = mutableHomeState.value.selectedInstance.id
