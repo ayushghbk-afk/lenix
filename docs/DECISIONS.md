@@ -217,4 +217,106 @@ trivial.
 
 ---
 
+## ADR-017 — Manifest signatures: minisign keys over a canonical JSON payload (accepted)
+
+**Context:** `ARCHITECTURE.md` §3 requires an APK-pinned Ed25519 signature on the manifest,
+and ADR-005 makes that signature the *only* root of trust: layer sha256s are trusted because
+the manifest that names them was signed, so nothing else needs a signature of its own. Phase
+3 shipped the schema, the parser, the digest gate and a `RootfsManifest.signature` field that
+was checked for non-blankness and nothing else. Signing an arbitrary JSON document is not a
+matter of hashing its bytes: two encodings of the same manifest are equally valid to a parser
+and would produce different signatures, so signers and verifiers must agree on the bytes.
+Android also has no pre-hashed-Ed25519 primitive, and the JDK's `Ed25519` `Signature` has no
+way to feed it the BLAKE2b-512 prefix minisign uses for text files.
+
+**Decision:** Sign a *canonical payload*, and keep the wire formats of the key and the
+signature compatible with the ecosystem tools people already know:
+
+- **Lenix Canonical JSON** (`RootfsManifestCanonicalizer`, mirrored byte-for-byte by
+  `scripts/canonical-json.py`): the top-level `signature` member is dropped, object keys are
+  sorted by UTF-16 code unit recursively, everything is compact, and numbers keep the exact
+  source token Jackson produced (no float round-trip). The canonical form of the shipped
+  manifest is a fixture in `RootfsManifestCanonicalizerTest`, and the two
+  `RootfsManifestCanonicalizerTest` vectors are `cmp`-checked against the Python mirror, so
+  the Kotlin and the signing script cannot drift apart silently.
+- **Keys** are minisign public key files (`untrusted comment` + base64(`"Ed"` ‖ key-id ‖
+  raw Ed25519 key)), so `minisign -G` output and `gen-rootfs-signing-key.sh` both drop
+  straight into `assets/rootfs/keys/*.pub`, which is the only place the app looks.
+- **Signatures** are `ed25519:` + base64(key-id ‖ 64-byte raw Ed25519 signature) verified
+  with the JDK's `Signature.getInstance("Ed25519")` — i.e. minisign's *legacy* raw mode,
+  `minisign -S -l -m <payload-file>`. That is why the signature covers canonical bytes and
+  not the file's bytes: `-l` is what makes pre-hashing unnecessary. The key id in the
+  signature must be one the ring trusts, and it is reported in errors.
+- **Placement:** verification runs before the download gate — in `HomeViewModel.install()`
+  (so a rejected manifest is an error state, never a stuck idle card) and again at the top of
+  `RootfsInstaller` (so the library cannot be used without it). Layer digests are then
+  re-checked after each download (`RootfsVerifier.verifyLayer`, ADR-015's cache gate).
+
+**Consequences:** Trust is enforceable, and "unsigned" is a failure rather than a mode: an
+empty ring rejects, so a build that forgets to ship a key ships nothing installable. Key
+rotation is file-based — drop a second `.pub` in and revoke by removing the old one, no code
+change; `RootfsSigningKeysTest` covers both paths. Re-signing is one script, and CI proves
+the shipped pair is consistent on every build. The cost: a manifest fetched from a CDN must be
+signed *before* publication (no "download, tweak, install" path). Numbers are the fragile part
+of any canonicalization scheme — a bare `double` would let `1E+8` and `100000000` sign
+differently — which is why the canonical form keeps source tokens and Jackson is configured
+with big-number nodes. A manifest that writes `1E+8` where the model reads `100000000` is
+therefore not a hole — the signature is over the bytes, so it simply fails to verify, which is
+the safe direction.
+
+---
+
+## ADR-018 — Extraction: pure-JVM streaming unpack now, native fast path in Phase 6 (accepted)
+
+**Context:** Phase 5 has to turn verified archives into a RootFS tree. `ARCHITECTURE.md` §6
+plans a native `libpvmextract` (libarchive + zstd + hardlink/ownership handling) for the
+release pipeline's `tar.zst` layers, and `NATIVE_BINARIES.md` lists its `.so` as needed from
+Phase 5 — but no native binary is built in this repository, the engine itself is Phase 6, and
+a Debian RootFS is ~40 k members: a DOM-style or non-streaming unpack would OOM on a phone, and
+waiting on the native path would block Phase 5 on Phase 6.
+
+**Decision:** Extract in the JVM now, streaming, and treat the archive as hostile input:
+
+- Apache `commons-compress` `TarArchiveInputStream` in **strict** mode (`longFileMode=POSIX`
+  so a GNU long-name extension member cannot silently mis-frame the entry that follows) inside
+  `XZ`/`GZIP` input streams, writing straight into `instances/<id>/.tmp/rootfs/` and committing
+  with one rename (ADR-015's staging rule). `org.tukaani:xz` is the XZ implementation — pure
+  Java, no JNI.
+- Escape-proofing: each member name is normalized segment-wise (drop `.`/empty, refuse `..`),
+  rejected for control characters or >255-char components, and its target must be the RootFS
+  root or below a *lexically canonicalized* parent — the symlink case `ROOTFS_SYSTEM.md` §2
+  calls out — while dangling member symlinks stay allowed because a real Debian rootfs has them.
+- Permission model: only the owner bits survive (group/other zeroed, setuid/setgid/sticky
+  dropped — the app user owns everything anyway, `ARCHITECTURE.md` §6), directories are always
+  writable so cleanup can proceed, and a member whose declared size exceeds what the stream
+  delivered fails as `ROOTFS_EXTRACTION_FAILED` instead of writing a truncated file.
+- Device nodes, FIFOs and sockets are skipped and counted, not failed on (upstream rootfs
+  tarballs contain them and `/dev` is PRoot's job); hard links are recreated with
+  `Files.createLink` and counted.
+- Two runtime guards, because the archive is untrusted even though it is signed: an expansion
+  cap (`max(4 × declared uncompressed size + 64 MiB, 1 MiB)`, or a 32 GiB ceiling when the
+  manifest gives no hint) plus a 2 M-entry cap, and a `StatFs` re-probe every 32 entries with a
+  32 MiB floor so a full device fails as `INSUFFICIENT_STORAGE` rather than mid-write `EIO`.
+- `zstd` is a *known* format that this extractor refuses with `UNSUPPORTED_COMPRESSION`, because
+  commons-compress' `ZstdCompressorInputStream` needs the `zstd-jni` native library — the exact
+  dependency the app does not have. The bundled manifest therefore pins the upstream Debian
+  layer as `tar.xz`, which the builder will keep producing until Phase 6 lands the native
+  reader (H4).
+- Progress and cancellation: unpacked bytes per layer with the current member name, throttled
+  to ~1 MiB, `ensureActive()` per entry; `ExtractionReport` (files/dirs/symlinks/hardlinks/
+  skipped/bytes) is persisted to `rootfs.json` as the install's audit record.
+
+**Consequences:** Phase 5 is testable on the JVM (`RootfsExtractorTest` builds real tarballs —
+escaping paths, symlinked parents, dangling and self-referencing links, long names, sparse
+members, garbage streams — and asserts each outcome), and the native `libpvmextract` in Phase 6
+becomes a *performance and format* upgrade behind the same contract instead of a prerequisite.
+The costs are honest ones: `tar.zst` install is not available yet, xattrs/ACLs are ignored (an
+app-uid rootfs needs none), and 40 k members through the JVM are slower than the native path —
+which is why progress reporting was built first. `commons-compress` and `xz` join Jackson and
+OkHttp as pure-JVM dependencies (≈1.2 MB before R8), and `app/proguard-rules.pro` now keeps
+annotation attributes so a release build still parses manifests (ADR-009's rule, newly
+load-bearing).
+
+---
+
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

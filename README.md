@@ -9,6 +9,34 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 ## Status
 
+**Phases 4 + 5 — Manifest signatures and real RootFS extraction**
+
+- Manifest trust gate: every manifest — bundled or fetched — must carry an Ed25519
+  signature made by a key embedded in the APK, verified over Lenix Canonical JSON before a
+  URL, a size or a digest from that manifest is believed (ADR-017)
+- Keys are minisign public key files (`assets/rootfs/keys/*.pub`); a signature is
+  `ed25519:` + base64(`key-id || signature`), so `minisign -S -l -m <payload>` output drops
+  straight in; an unsigned or foreign-keyed manifest fails as `SIGNATURE_FAILED` with both
+  key ids named, and an empty key ring rejects everything rather than skipping the check
+- The bundled Debian manifest is really signed: `scripts/sign-rootfs-manifest.sh` (openssl)
+  and `scripts/canonical-json.py` (the byte-for-byte mirror of the Kotlin canonicalizer)
+  produce it, and `BundledRootfsManifestTrustTest` fails CI if the shipped manifest and the
+  shipped key ever stop agreeing
+- Real streaming extraction replaces the Phase 3 staging stub: layers are decompressed and
+  unpacked into `instances/<id>/.tmp/rootfs/` member by member, then committed with one
+  atomic rename (ADR-018)
+- Untrusted-archive hardening in the extractor: escaping member names and symlinked parent
+  directories are refused (tar-slip), setuid/setgid bits are dropped, device nodes/FIFOs
+  are skipped and counted, a layer that expands far past its manifest size is refused, and
+  free space is re-probed while writing so a full device fails as `INSUFFICIENT_STORAGE`
+- `instances/<id>/rootfs.json` now records the auditable result: per-layer digests, entry
+  counts, the signing key id and the hash of the canonical manifest payload
+- Progress is honest during extraction (bytes unpacked per layer, current member), the
+  Home screen says so, and a cancel/reset discards the staging tree while the verified
+  layer cache survives
+- New error categories `SIGNATURE_FAILED` and `UNSUPPORTED_COMPRESSION`; new unit tests for
+  the canonicalizer, key/signature wire formats, the verifier, the signer and extraction
+
 **Phase 3 — Resumable RootFS downloader (and the settings fix)**
 
 - Real install pipeline: bundled manifest → download → verify → stage → commit,
@@ -61,9 +89,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Local fake installer for UI testing
 - Unit tests for package `vm` and `installer`
 
-The actual PRoot engine, PTY, and VNC viewer are the next phases (extraction of
-the downloaded layers is Phase 5; until then a verified layer is staged into the
-instance directory).
+Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked;
+the actual PRoot engine, PTY and VNC viewer are the next phases. zstd layers — the format
+Lenix's own builder will publish — are read once the native extractor lands in Phase 6, and
+until then the pinned upstream layer ships as `tar.xz`.
 
 ## Runtime model
 
@@ -125,6 +154,17 @@ tests, assembles the debug APK, and uploads the artifact.
 ANDROID_HOME=~/Android/Sdk ./scripts/smoke.sh
 ```
 
+### Re-sign a RootFS manifest
+
+Any change to a bundled manifest invalidates its signature, so it must be re-signed before
+the app will accept it (CI has a test that enforces this):
+
+```bash
+./scripts/sign-rootfs-manifest.sh app/src/main/assets/rootfs/debian-bookworm-aarch64.json ~/lenix-signing/lenix-release.key.pem
+```
+
+See `docs/BUILDING.md` for key generation and rotation.
+
 ## Product scope (v0.1)
 
 | Item | v0.1 |
@@ -157,7 +197,8 @@ app/src/main/java/com/lenix/
 │       ├── DesktopScreen.kt
 │       └── SettingsScreen.kt
 ├── vm/                 # state machine, VmManager, instance/process abstractions
-├── installer/          # RootFS manifest, verifier, catalog, installer
+├── installer/          # manifest, catalog, signing keys + verifier, installer
+│   └── extract/        # streaming tar.{xz,gz} extraction, escape-proofed
 ├── data/               # local persistence: config.json instance store, selection,
 │   ├── SettingsStore.kt      # settings.json (the settings-savings fix)
 │   ├── InstallStateStore.kt  # per-instance state.json install checkpoints
@@ -181,8 +222,9 @@ NOT_INSTALLED → DOWNLOADING → VERIFYING → EXTRACTING → INSTALLING → RE
 
 ```
 NETWORK_ERROR, INSUFFICIENT_STORAGE, DOWNLOAD_CORRUPTED, CHECKSUM_FAILED,
-ROOTFS_EXTRACTION_FAILED, UNSUPPORTED_ARCHITECTURE, NATIVE_ENGINE_FAILED,
-PROCESS_CRASHED, VNC_CONNECTION_FAILED
+SIGNATURE_FAILED, ROOTFS_EXTRACTION_FAILED, UNSUPPORTED_COMPRESSION,
+UNSUPPORTED_ARCHITECTURE, NATIVE_ENGINE_FAILED, PROCESS_CRASHED,
+VNC_CONNECTION_FAILED
 ```
 
 ## Device requirements
@@ -213,8 +255,8 @@ PROCESS_CRASHED, VNC_CONNECTION_FAILED
 - [x] **Phase 1** — Android project foundation, Compose UI, state machine, manifest parser
 - [x] **Phase 2** — instance manager and local persistence
 - [x] **Phase 3** — resumable RootFS downloader
-- [ ] **Phase 4** — checksum + signature verification
-- [ ] **Phase 5** — RootFS extraction
+- [x] **Phase 4** — checksum + signature verification
+- [x] **Phase 5** — RootFS extraction
 - [ ] **Phase 6** — native engine (PRoot) + terminal
 - [ ] **Phase 7** — Openbox desktop + built-in VNC viewer
 

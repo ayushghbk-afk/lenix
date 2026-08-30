@@ -1,5 +1,6 @@
 package com.lenix.data.download
 
+import com.lenix.util.Digests
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
 import java.io.File
@@ -65,7 +66,7 @@ class LayerCache(
     }
 
     private fun requireValidSha256(sha256: String) {
-        if (!SHA256_REGEX.matches(sha256)) {
+        if (!Digests.isSha256Hex(sha256)) {
             throw VmException(
                 VmError.DOWNLOAD_CORRUPTED,
                 "Layer digest '$sha256' is not a valid sha256 hex string.",
@@ -78,7 +79,5 @@ class LayerCache(
         const val FINAL_SUFFIX = ".layer"
         const val PART_SUFFIX = ".layer.part"
         const val ETAG_SUFFIX = ".layer.etag"
-
-        private val SHA256_REGEX = Regex("[0-9a-fA-F]{64}")
     }
 }

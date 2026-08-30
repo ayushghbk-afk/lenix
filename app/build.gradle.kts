@@ -88,6 +88,17 @@ dependencies {
     // ARCHITECTURE.md pins OkHttp for the downloader; see docs/DECISIONS.md ADR-015.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // RootFS manifest signatures (Phase 4) need no dependency at all: Ed25519 ships with
+    // the platform's JCA from API 29, which is also minSdk here (see ADR-017).
+    //
+    // Streaming RootFS extraction (Phase 5) is pure Java, so it works before the native
+    // engine lands: Commons Compress reads the tar stream (ustar/pax/GNU long names,
+    // sparse entries) and XZ for Java decodes the .tar.xz layers that proot-distro and
+    // our own builder publish. Both are dependency-light, license-clean (Apache-2.0 and
+    // 0BSD) and carry no native code; see ADR-018.
+    implementation("org.apache.commons:commons-compress:1.28.0")
+    implementation("org.tukaani:xz:1.12")
+
     // Local unit tests
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
@@ -95,4 +106,17 @@ dependencies {
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+/**
+ * CI reads the console, not the HTML report, so a failing test has to explain itself there:
+ * full exception messages and stack traces (one summarized line is not a diagnosis), plus
+ * anything a test prints on purpose.
+ */
+tasks.withType<Test>().configureEach {
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        showStandardStreams = true
+    }
 }

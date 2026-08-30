@@ -19,14 +19,17 @@ import java.nio.file.StandardCopyOption
  * files in the content-addressed cache are the *real* resume points; this record
  * is the fast, human-readable progress snapshot layered on top (see ADR-014/015).
  *
- * [bytesDone]/[bytesTotal] are aggregate values across all layers of the manifest.
+ * [bytesDone]/[bytesTotal] are aggregate values across all layers of the manifest,
+ * measured in the unit the phase works in: compressed bytes for `DOWNLOADING`, unpacked
+ * bytes for `EXTRACTING` (an interrupted extraction is *restarted*, not resumed — the
+ * UI says so rather than promising a continuation).
  */
 data class InstallState(
     val schemaVersion: Int = SCHEMA_VERSION,
     val instanceId: String,
     /** Install phase name (`DOWNLOADING`, `VERIFYING`, `EXTRACTING`, `COMMITTING`). */
     val phase: String,
-    /** Index of the layer being downloaded when [phase] is `DOWNLOADING`. */
+    /** Index of the layer being downloaded or extracted when the phase names one. */
     val layerIndex: Int = 0,
     val layerCount: Int = 0,
     val bytesDone: Long = 0,

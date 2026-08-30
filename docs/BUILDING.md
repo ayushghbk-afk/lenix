@@ -36,6 +36,33 @@ The APK will be at: `app/build/outputs/apk/release/app-release-unsigned.apk`
 ./gradlew dependencies --configuration debugRuntimeClasspath
 ```
 
+## RootFS Manifest Signing
+
+Every manifest the app reads — including the one bundled in `app/src/main/assets/rootfs/` —
+must carry an Ed25519 signature made by a key listed in `app/src/main/assets/rootfs/keys/`
+(`docs/ROOTFS_SYSTEM.md` §1, ADR-017). This applies to debug builds too: an unsigned manifest
+fails install with `SIGNATURE_FAILED` ("not signed by a key this build trusts") — it is not a
+release-only check.
+
+```bash
+# one-off: create the release key material (keep the .key.pem OUT of git)
+./scripts/gen-rootfs-signing-key.sh ~/lenix-signing
+cp ~/lenix-signing/lenix-release.pub app/src/main/assets/rootfs/keys/
+
+# after editing a manifest — rewrites its "signature" member over the canonical payload
+./scripts/sign-rootfs-manifest.sh app/src/main/assets/rootfs/debian-bookworm-aarch64.json ~/lenix-signing/lenix-release.key.pem
+
+# what the verifier sees, and what the signature covers
+./scripts/canonical-json.py app/src/main/assets/rootfs/debian-bookworm-aarch64.json
+```
+
+Signing works with `openssl` + `python3` alone (no minisign binary needed), and is equivalent
+to `minisign -S -l -m <canonical-payload>` with the same key. CI re-runs
+`BundledRootfsManifestTrustTest`, which verifies the shipped manifest against the shipped key,
+so an edit that forgets to re-sign fails the build rather than shipping an uninstallable image.
+Rotating a key = add the new `.pub` to the assets directory (both keys are trusted while
+manifests are re-signed), then delete the old one.
+
 ## CI/CD Build
 
 GitHub Actions workflows:
