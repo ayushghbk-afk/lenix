@@ -37,11 +37,6 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x gradlew
 
-      # A release APK without this step contains no engine at all: the release build is
-      # not debuggable, so Android only extracts lib*.so payload entries (ADR-022).
-      - name: Fetch PRoot engine payload
-        run: ./scripts/fetch-engine.sh arm64-v8a
-
       - name: Run tests
         run: ./gradlew testDebugUnitTest --no-daemon
 

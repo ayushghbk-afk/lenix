@@ -147,29 +147,85 @@ dependencies {
  */
 val engineAbis = listOf("arm64-v8a")
 
-fun engineProblems(): List<String> = engineAbis.flatMap { abi ->
-    val dir = file("src/main/resources/lib/$abi")
-    val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
-    when {
-        files.isEmpty() -> listOf(
-            "No PRoot engine payload in src/main/resources/lib/$abi/ — " +
-                "run ./scripts/fetch-engine.sh $abi"
-        )
-        else -> files.map { it.name }
-            .filterNot { it.startsWith("lib") && it.endsWith(".so") }
-            .map {
-                "src/main/resources/lib/$abi/$it is not named lib*.so, so Android will " +
-                    "not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
-            }
+// Plain (abi -> dir) pairs resolved during configuration: the checks below run at
+// execution time and must not touch `Project` (configuration-cache safe).
+val enginePayloadDirs: List<Pair<String, File>> =
+    engineAbis.map { abi -> abi to file("src/main/resources/lib/$abi") }
+
+// Pure lambda (no script/Project capture) so the providers below stay
+// configuration-cache safe.
+val engineProblemsOf: (List<Pair<String, File>>) -> List<String> = { dirs ->
+    dirs.flatMap { (abi, dir) ->
+        val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
+        if (files.isEmpty()) {
+            listOf(
+                "No PRoot engine payload in app/src/main/resources/lib/$abi/ — " +
+                    "run ./scripts/fetch-engine.sh $abi"
+            )
+        } else {
+            files.map { it.name }
+                .filterNot { it.startsWith("lib") && it.endsWith(".so") }
+                .map {
+                    "app/src/main/resources/lib/$abi/$it is not named lib*.so, so Android " +
+                        "will not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
+                }
+        }
     }
 }
+
+/**
+ * Fetches the engine payload as part of the build.
+ *
+ * The binaries are GPL and intentionally untracked, so *something* has to run
+ * `scripts/fetch-engine.sh` or the APK ships an empty `lib/<abi>/`. Doing it here rather
+ * than only in a CI workflow means a plain `./gradlew assembleDebug` on a fresh clone
+ * also produces a working APK. Set `-PskipEngineFetch=true` (or `SKIP_ENGINE_FETCH=1`)
+ * to build the UI without pulling binaries; the payload check then only warns.
+ */
+val fetchEnginePayload by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Downloads the PRoot engine payload into src/main/resources/lib/<abi>/."
+
+    val abi = engineAbis.first()
+    val script = rootProject.file("scripts/fetch-engine.sh")
+    val payloadDir = file("src/main/resources/lib/$abi")
+
+    // Skip entirely once a correctly named payload exists, so rebuilds need no network.
+    // Deliberately `onlyIf` rather than `outputs.dir(payloadDir)`: the payload lives in
+    // the source tree, and declaring it as a task output invites Gradle's stale-output
+    // cleanup to delete files there.
+    onlyIf {
+        payloadDir.listFiles()
+            ?.none { it.isFile && it.name.startsWith("lib") && it.name.endsWith(".so") } ?: true
+    }
+
+    commandLine("bash", script.absolutePath, abi)
+    // A missing engine must not look like a green build, but an offline dev should still
+    // get a usable error from verifyEnginePayload rather than a stack trace here.
+    isIgnoreExitValue = true
+    doLast {
+        val result = executionResult.get()
+        if (result.exitValue != 0) {
+            logger.warn(
+                "WARNING: scripts/fetch-engine.sh failed (exit ${result.exitValue}). " +
+                    "The APK will have no PRoot engine unless you add it manually."
+            )
+        }
+    }
+}
+
+val skipEngineFetch = providers.gradleProperty("skipEngineFetch").orNull == "true" ||
+    providers.environmentVariable("SKIP_ENGINE_FETCH").orNull == "1"
 
 val verifyEnginePayload by tasks.registering {
     group = "verification"
     description = "Fails the build when the PRoot engine payload is missing or misnamed."
-    // Resolved at configuration time so the task carries no Project reference into the
-    // execution phase (configuration-cache safe).
-    val problems = provider { engineProblems() }
+    if (!skipEngineFetch) dependsOn(fetchEnginePayload)
+    // Read through a provider so the task holds no Project reference at execution time
+    // (configuration-cache safe).
+    val dirs = enginePayloadDirs
+    val check = engineProblemsOf
+    val problems = provider { check(dirs) }
     doLast {
         val found = problems.get()
         if (found.isNotEmpty()) {
@@ -184,10 +240,15 @@ val verifyEnginePayload by tasks.registering {
 
 val warnEnginePayload by tasks.registering {
     description = "Warns (without failing) when a debug build has no usable engine payload."
-    val problems = provider { engineProblems() }
+    if (!skipEngineFetch) dependsOn(fetchEnginePayload)
+    val dirs = enginePayloadDirs
+    val check = engineProblemsOf
+    val problems = provider { check(dirs) }
     doLast { problems.get().forEach { logger.warn("WARNING: $it") } }
 }
 
+// Release must never ship without an engine; debug only warns so UI work stays possible
+// offline (and debug builds do extract the historic unprefixed names anyway).
 tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }
     .configureEach { dependsOn(verifyEnginePayload) }
 

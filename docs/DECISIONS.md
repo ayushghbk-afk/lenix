@@ -429,11 +429,15 @@ never clear it. Two independent defects:
   `libtalloc`'s `SONAME`/`DT_NEEDED` are rewritten to match so the bionic linker still
   resolves them — `scripts/fetch-engine.sh` does this with `patchelf`, falling back to
   an in-place, length-preserving `.dynstr` patch.
-- `scripts/fetch-engine.sh` runs in the `build-apk` and `release` workflows, and
-  refuses to stage anything not named `lib*.so`.
-- `assembleRelease`/`bundleRelease` depend on a `verifyEnginePayload` Gradle task that
-  fails the build on an empty or misnamed payload; debug builds only warn, so UI work
-  does not require fetching GPL binaries.
+- The **build itself** fetches the payload: a `fetchEnginePayload` Gradle task runs
+  `scripts/fetch-engine.sh` when no `lib*.so` is present, so a plain
+  `./gradlew assembleDebug` on a fresh clone produces a working APK instead of relying
+  on a CI-only step someone forgot to add. It is skipped once the payload exists (no
+  network on rebuilds) and can be bypassed with `-PskipEngineFetch=true` /
+  `SKIP_ENGINE_FETCH=1`. The script refuses to stage anything not named `lib*.so`.
+- `assembleRelease`/`bundleRelease` depend on a `verifyEnginePayload` task that fails
+  the build on an empty or misnamed payload; debug builds only warn, so UI work does
+  not require fetching GPL binaries.
 - `EngineInstaller` resolves both the new and historic names (debug builds and old
   `filesDir` dev installs still carry the latter) and, when nothing is found, reports
   any files present that are *not* `lib*.so` — the directory looks correct on disk, so

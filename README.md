@@ -112,7 +112,8 @@ device still needs the PRoot binary (plus its static loader) under
 `./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. The payload is
 staged as `libproot.so` / `libprootloader.so` / `libtalloc.so`: Android only extracts
 `lib*.so` entries from an APK's `lib/<abi>/` on release builds, so anything else is
-packaged and then silently discarded (ADR-022). CI runs the script automatically. zstd layers wait
+packaged and then silently discarded (ADR-022). The Gradle build runs the script for
+you when the payload is missing — pass `-PskipEngineFetch=true` to build without it. zstd layers wait
 on `libpvmnative`; the pinned upstream layer is `tar.xz`.
 
 ## Runtime model
