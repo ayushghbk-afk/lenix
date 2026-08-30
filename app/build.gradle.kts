@@ -247,6 +247,16 @@ val warnEnginePayload by tasks.registering {
     doLast { problems.get().forEach { logger.warn("WARNING: $it") } }
 }
 
+// The payload must exist before anything *reads* src/main/resources, not merely before
+// `assembleDebug` finishes: assemble is a lifecycle task and Gradle is free to run the
+// packaging tasks before any other dependency of it. Hooking the java-resource merge
+// and packaging tasks directly is what actually gets the engine into the APK.
+if (!skipEngineFetch) {
+    tasks.matching { task ->
+        task.name.contains("JavaRes") || task.name.matches(Regex("package(Debug|Release)"))
+    }.configureEach { dependsOn(fetchEnginePayload) }
+}
+
 // Release must never ship without an engine; debug only warns so UI work stays possible
 // offline (and debug builds do extract the historic unprefixed names anyway).
 tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }
@@ -270,8 +280,14 @@ val verifyApkEngine by tasks.registering {
     val abi = engineAbis.first()
     val apkDir = layout.buildDirectory.dir("outputs/apk/debug")
     val requiredEntry = "lib/$abi/libproot.so"
+    val sourcePayload = file("src/main/resources/lib/$abi")
 
     doLast {
+        // Report the source payload too: "APK has no engine" has very different causes
+        // depending on whether the fetch ran at all.
+        val staged = sourcePayload.listFiles()?.map { it.name }?.sorted().orEmpty()
+        logger.lifecycle("Engine payload staged in source tree: ${staged.ifEmpty { listOf("(none)") }}")
+
         val apks = apkDir.get().asFile.listFiles()?.filter { it.name.endsWith(".apk") }.orEmpty()
         if (apks.isEmpty()) {
             throw org.gradle.api.GradleException("No debug APK found in ${apkDir.get().asFile}.")
@@ -284,8 +300,11 @@ val verifyApkEngine by tasks.registering {
                 if (zip.getEntry(requiredEntry) == null) {
                     throw org.gradle.api.GradleException(
                         "${apk.name} has no $requiredEntry — the app would fail at START " +
-                            "with NATIVE_ENGINE_FAILED. Entries under lib/$abi/: " +
-                            (libEntries.ifEmpty { listOf("(none)") }).joinToString()
+                            "with NATIVE_ENGINE_FAILED.\n" +
+                            "  entries under lib/$abi/: " +
+                            (libEntries.ifEmpty { listOf("(none)") }).joinToString() + "\n" +
+                            "  staged in source tree:  " +
+                            (staged.ifEmpty { listOf("(none)") }).joinToString()
                     )
                 }
                 val unextractable = libEntries
