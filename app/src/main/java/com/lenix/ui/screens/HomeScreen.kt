@@ -348,7 +348,7 @@ private fun VmCard(
                                 "This RootFS layer is compressed in a format the app cannot " +
                                     "read yet — zstd needs libpvmnative. xz and gz layers work today."
                             VmError.NATIVE_ENGINE_FAILED ->
-                                state.message.takeIf { it.isNotBlank() }
+                                state.message?.takeIf { it.isNotBlank() }
                                     ?: ("The PRoot engine payload is missing from this build. " +
                                         "Run scripts/fetch-engine.sh, rebuild, then tap AUTOFIX " +
                                         "ENGINE to re-check.")
