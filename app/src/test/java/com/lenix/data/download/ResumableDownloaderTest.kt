@@ -259,6 +259,17 @@ class ResumableDownloaderTest {
             val recorded = server.takeRequest(200, TimeUnit.MILLISECONDS) ?: break
             seen += "${recorded.method} ${recorded.path} Range=${recorded.getHeader("Range")}"
         }
+        // CI console prints only exception class + frame: encode the observed
+        // request count in the class so the next log identifies the mode.
+        val partNow = cache.partFile(layer.sha256).length()
+        when (seen.size) {
+            2 -> Unit
+            0 -> throw NullPointerException("requests=$seen part=$partNow")
+            1 -> throw IllegalStateException("requests=$seen part=$partNow")
+            3 -> throw UnsupportedOperationException("requests=$seen part=$partNow")
+            4 -> throw IllegalArgumentException("requests=$seen part=$partNow")
+            else -> throw IndexOutOfBoundsException("requests=$seen part=$partNow")
+        }
         assertEquals("requests the server saw: $seen", 2, seen.size)
         // Each severed attempt kept the bytes that did arrive, so the resume
         // point advanced past the original 1234 bytes but never restarted from
