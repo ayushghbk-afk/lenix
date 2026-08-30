@@ -197,7 +197,7 @@ private fun VmCard(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     LinearProgressIndicator(
-                        progress = { progress.fraction.coerceIn(0f, 1f) },
+                        progress = progress.fraction.coerceIn(0f, 1f),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

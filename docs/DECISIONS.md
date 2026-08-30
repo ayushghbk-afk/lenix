@@ -95,6 +95,25 @@ disclosure). RootFS layers hosted on GitHub Releases (Range-supported) for v1.
 every transition; guest owned by `GuestProcess` (process group, SIGTERM→SIGKILL);
 RFB reader thread + SurfaceView renderer; input from UI thread.
 
+## ADR-013 — Jetifier disabled (accepted)
+
+**Context:** `android.enableJetifier=true` came with the project template, but every
+dependency Lenix uses is already AndroidX/Jetpack, Kotlin or plain Java, so nothing
+needs the legacy support-library rewrite. Jetifier still ran a bytecode pass over
+every jar in the graph, and that pass was not merely wasted: Jetifier's bundled ASM
+cannot read class file major version 65 (Java 21), and jackson-core 2.16+ ships Java
+21 classes under `META-INF/versions/21` (shaded FastDoubleParser; the jar is
+`Multi-Release: true`). With Jetifier on, resolution of `debugCompileClasspath` died
+in `JetifyTransform` — `IllegalArgumentException: Unsupported class file major
+version 65` — before Kotlin was ever compiled.
+**Decision:** Set `android.enableJetifier=false` and keep it off. If a future
+dependency still needs jetification, upgrade or replace that dependency rather than
+flipping the flag back.
+**Consequences:** Configuration and dexing get faster (one less whole-graph bytecode
+transform), and we drop a flag that AGP 9 removes outright. Multi-release jars such
+as jackson-core now reach D8 untouched and Android resolves their base (Java 8)
+entries, which is the only variant the runtime would ever load.
+
 ---
 
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*
