@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lenix.vm.launch.GuestSession
 import com.lenix.vm.pty.PtySession
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -61,9 +63,12 @@ fun TerminalScreen(
     DisposableEffect(pty) {
         onDispose { pty?.close() }
     }
-    val liveOutput = pty?.output?.collectAsState()
-    val output = liveOutput?.value
-        ?: "No guest shell is attached.\nPress START on Home so PRoot can spawn /bin/bash, then reopen Terminal."
+    val idle = remember {
+        MutableStateFlow(
+            "No guest shell is attached.\nPress START on Home so PRoot can spawn /bin/bash, then reopen Terminal.",
+        )
+    }
+    val output by (pty?.output ?: idle).collectAsState()
     var input by remember { mutableStateOf(TextFieldValue("")) }
     val scroll = rememberScrollState()
     LaunchedEffect(output) { scroll.animateScrollTo(scroll.maxValue) }
@@ -80,6 +85,9 @@ fun TerminalScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Back") }
+                },
+                actions = {
+                    IconButton(onClick = onHome) { Icon(Icons.Default.Home, contentDescription = "Home") }
                 },
             )
         },

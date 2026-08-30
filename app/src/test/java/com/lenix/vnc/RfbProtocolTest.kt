@@ -1,6 +1,5 @@
 package com.lenix.vnc
 
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,16 +34,16 @@ class RfbProtocolTest {
         val buf = ByteBuffer.allocate(24 + 4 + 5).order(ByteOrder.BIG_ENDIAN)
         buf.putShort(1280)
         buf.putShort(720)
-        buf.put(32)
-        buf.put(24)
-        buf.put(0)
-        buf.put(1)
+        buf.put(32.toByte())
+        buf.put(24.toByte())
+        buf.put(0.toByte())
+        buf.put(1.toByte())
         buf.putShort(255)
         buf.putShort(255)
         buf.putShort(255)
-        buf.put(16)
-        buf.put(8)
-        buf.put(0)
+        buf.put(16.toByte())
+        buf.put(8.toByte())
+        buf.put(0.toByte())
         buf.put(ByteArray(3))
         buf.putInt(5)
         buf.put("Lenix".toByteArray())
@@ -90,9 +89,9 @@ class RfbProtocolTest {
         serverOut.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(0).array())
         val init = ByteBuffer.allocate(24 + 4 + 1).order(ByteOrder.BIG_ENDIAN)
         init.putShort(2).putShort(2)
-        init.put(32).put(24).put(0).put(1)
+        init.put(32.toByte()).put(24.toByte()).put(0.toByte()).put(1.toByte())
         init.putShort(255).putShort(255).putShort(255)
-        init.put(16).put(8).put(0)
+        init.put(16.toByte()).put(8.toByte()).put(0.toByte())
         init.put(ByteArray(3))
         init.putInt(1).put('X'.code.toByte())
         serverOut.write(init.array())

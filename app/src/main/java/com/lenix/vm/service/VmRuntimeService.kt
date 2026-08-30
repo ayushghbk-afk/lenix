@@ -10,6 +10,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import androidx.annotation.RequiresApi
+import com.lenix.R
 import com.lenix.ui.MainActivity
 
 /**
@@ -27,7 +29,7 @@ class VmRuntimeService : Service() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Lenix")
             .setContentText("Linux environment is running")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(
                 PendingIntent.getActivity(
                     this,

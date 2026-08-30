@@ -249,7 +249,9 @@ class HomeViewModel(
             try {
                 guestRuntime.start(id, desktop = desktop)
                 if (background) {
-                    VmRuntimeService.start(getApplication())
+                    withContext(Dispatchers.Main) {
+                        VmRuntimeService.start(getApplication())
+                    }
                 }
                 val dest = when {
                     desktop -> Routes.DESKTOP
@@ -283,7 +285,9 @@ class HomeViewModel(
             } catch (_: Exception) {
                 vmManager.markStopped(id)
             }
-            VmRuntimeService.stop(getApplication())
+            withContext(Dispatchers.Main) {
+                VmRuntimeService.stop(getApplication())
+            }
             mutableHomeState.update { state -> state.copy(message = null) }
         }
     }
