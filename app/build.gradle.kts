@@ -107,3 +107,16 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+/**
+ * CI reads the console, not the HTML report, so a failing test has to explain itself there:
+ * full exception messages and stack traces (one summarized line is not a diagnosis), plus
+ * anything a test prints on purpose.
+ */
+tasks.withType<Test>().configureEach {
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        showStandardStreams = true
+    }
+}

@@ -68,7 +68,10 @@ class RootfsExtractorTest {
 
         assertEquals("lenix\n", TarFixtures.readText(File(File(root, "etc"), "hostname")))
         assertTrue(File(root, "bin/sh").canExecute())
-        assertFalse(File(root, "etc/hostname").canExecute())
+        assertFalse(
+            "etc/hostname permissions: ${Files.getPosixFilePermissions(File(root, "etc/hostname").toPath())}",
+            File(root, "etc/hostname").canExecute(),
+        )
         assertTrue(Files.isSymbolicLink(File(root, "bin/sh-link").toPath()))
         assertEquals(
             "sh",

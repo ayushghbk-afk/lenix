@@ -177,7 +177,11 @@ class RootfsInstallerTest {
         // The base layer's files are really there, with their permissions.
         assertTrue(File(rootfs, "bin/sh").canExecute())
         assertTrue(File(rootfs, "etc/debian_version").isFile)
-        assertFalse(File(rootfs, "etc/debian_version").canExecute())
+        assertFalse(
+            "etc/debian_version permissions: " +
+                java.nio.file.Files.getPosixFilePermissions(File(rootfs, "etc/debian_version").toPath()),
+            File(rootfs, "etc/debian_version").canExecute(),
+        )
         // The desktop layer overlaid the base file and brought its own symlink.
         assertEquals("bookworm/sid + openbox\n", readOverlayed(rootfs))
         assertTrue(File(rootfs, "usr/local/bin/lenix-entry").canExecute())
