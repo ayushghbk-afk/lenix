@@ -39,7 +39,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lenix.ui.HomeUiState
-import com.lenix.vm.VmError
 import com.lenix.vm.VmState
 
 /**
@@ -52,7 +51,6 @@ import com.lenix.vm.VmState
 fun HomeScreen(
     state: HomeUiState,
     onInstall: () -> Unit,
-    onCancelInstall: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
@@ -131,7 +129,6 @@ fun HomeScreen(
                     state = state,
                     instance = instance,
                     onInstall = onInstall,
-                    onCancelInstall = onCancelInstall,
                     onStart = onStart,
                     onStop = onStop,
                     onOpenInstance = onOpenInstance,
@@ -177,7 +174,6 @@ private fun VmCard(
     state: HomeUiState,
     instance: com.lenix.vm.VmInstance,
     onInstall: () -> Unit,
-    onCancelInstall: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInstance: () -> Unit,
@@ -230,12 +226,6 @@ private fun VmCard(
                         progress = { progress.fraction.coerceIn(0f, 1f) },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    OutlinedButton(
-                        onClick = onCancelInstall,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("CANCEL INSTALL")
-                    }
                 }
 
                 VmState.READY -> {
@@ -277,41 +267,12 @@ private fun VmCard(
                 }
 
                 VmState.ERROR -> {
-                    val error = instance.lastError ?: VmError.UNKNOWN
+                    val message = instance.lastError?.name ?: "UNKNOWN"
                     Text(
-                        text = when (error) {
-                            VmError.INSTALL_INTERRUPTED ->
-                                "Install interrupted — completed layers are cached and " +
-                                    "the download resumes where it stopped."
-                            else -> "Error: ${error.name}"
-                        },
+                        text = "Error: $message",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    if (error == VmError.INSTALL_INTERRUPTED) {
-                        val progress = state.installProgress
-                        if (progress.message.isNotBlank()) {
-                            Text(
-                                text = progress.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (progress.fraction > 0f) {
-                            LinearProgressIndicator(
-                                progress = { progress.fraction.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        Button(
-                            onClick = onInstall,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("RESUME INSTALL")
-                        }
-                    }
                     OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Delete, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
