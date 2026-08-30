@@ -401,4 +401,50 @@ JVM-tested.
 
 ---
 
+## ADR-022 — Engine payload files are named `lib*.so` and CI fetches them (accepted)
+
+**Context:** ADR-021 put the engine in `app/src/main/resources/lib/<abi>/`, but START
+still failed with `No PRoot engine for 'arm64-v8a' was found` and AUTOFIX ENGINE could
+never clear it. Two independent defects:
+
+1. **Nothing ever ran `scripts/fetch-engine.sh`.** The directory held only `.gitkeep`
+   (the binaries are GPL and deliberately untracked) and no workflow fetched them, so
+   every CI APK — debug *and* release — shipped an empty `lib/arm64-v8a/`. AUTOFIX only
+   re-validates the payload; it cannot download an engine (by design, see ADR-021), so
+   the button was guaranteed to fail.
+2. **The payload names could never have been extracted.** Landing a file in the APK's
+   `lib/<abi>/` is not enough. For a non-debuggable package the installer's
+   `NativeLibrariesIterator` keeps only entries whose base name starts with `lib` and
+   ends with `.so` (`frameworks/base` → `libs/androidfw/ApkParsing.cpp`,
+   `ValidLibraryPathLastSlash()`, plus the `isFilenameSafe()` charset). `proot`,
+   `loader` and even `libtalloc.so.2` all fail it, so they were packaged and then
+   silently dropped — `nativeLibraryDir` stayed empty. `debuggable` bypasses the
+   filter, so a locally-built debug APK would have looked fine and hidden the bug.
+
+**Decision:**
+
+- Ship every payload file as `lib*.so`: `libproot.so`, `libprootloader.so`,
+  `libtalloc.so`, `libandroid-shmem.so`, `libtini.so`, `libbusybox.so`. The names are
+  arbitrary to PRoot (exec'd by absolute path, loader pinned via `$PROOT_LOADER`), but
+  `libtalloc`'s `SONAME`/`DT_NEEDED` are rewritten to match so the bionic linker still
+  resolves them — `scripts/fetch-engine.sh` does this with `patchelf`, falling back to
+  an in-place, length-preserving `.dynstr` patch.
+- `scripts/fetch-engine.sh` runs in the `build-apk` and `release` workflows, and
+  refuses to stage anything not named `lib*.so`.
+- `assembleRelease`/`bundleRelease` depend on a `verifyEnginePayload` Gradle task that
+  fails the build on an empty or misnamed payload; debug builds only warn, so UI work
+  does not require fetching GPL binaries.
+- `EngineInstaller` resolves both the new and historic names (debug builds and old
+  `filesDir` dev installs still carry the latter) and, when nothing is found, reports
+  any files present that are *not* `lib*.so` — the directory looks correct on disk, so
+  the message has to name the real cause.
+
+**Consequences:** Release APKs now actually contain a runnable engine, and the two
+failure modes are caught at build time instead of on a user's device. `NativeSetup`
+constants are the single source of truth for the names, shared by the installer, the
+fetch script (by convention) and the tests that assert every shipped name survives the
+installer filter.
+
+---
+
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

@@ -101,14 +101,11 @@ class ProotGuestEngine : GuestEngine {
         val legacyDir = NativeSetup.nativeDir(request.filesDir, request.abi)
         // Dependencies (e.g. libtalloc) sit next to the engine binary.
         val libDir = (payloadDir ?: legacyDir).takeIf { it.isDirectory }
-        val tini = File(
-            if (payloadDir != null && File(payloadDir, NativeSetup.TINI).isFile) {
-                payloadDir
-            } else {
-                legacyDir
-            },
-            NativeSetup.TINI,
-        )
+        // tini is optional; accept the canonical `libtini.so` and the historic `tini`
+        // that debug payloads / legacy filesDir installs still use.
+        val tini = payloadDir?.let { NativeSetup.findPayloadFile(it, NativeSetup.TINI_NAMES) }
+            ?: NativeSetup.findPayloadFile(legacyDir, NativeSetup.TINI_NAMES)
+            ?: File(legacyDir, NativeSetup.TINI)
 
         val argv = when (request.mode) {
             GuestMode.SHELL -> ProotCommandBuilder.shell(

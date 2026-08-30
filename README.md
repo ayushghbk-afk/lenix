@@ -107,9 +107,12 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked.
 The PRoot command line, PTY/pipe terminal and loopback RFB viewer are in the app; a
-device still needs the `proot` binary (plus its static `loader`) under
+device still needs the PRoot binary (plus its static loader) under
 `app/src/main/resources/lib/arm64-v8a/` before START can spawn a guest — run
-`./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. zstd layers wait
+`./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. The payload is
+staged as `libproot.so` / `libprootloader.so` / `libtalloc.so`: Android only extracts
+`lib*.so` entries from an APK's `lib/<abi>/` on release builds, so anything else is
+packaged and then silently discarded (ADR-022). CI runs the script automatically. zstd layers wait
 on `libpvmnative`; the pinned upstream layer is `tar.xz`.
 
 ## Runtime model

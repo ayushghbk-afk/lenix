@@ -131,6 +131,70 @@ dependencies {
 }
 
 /**
+ * Guard against the two ways the engine payload silently disappears from an APK.
+ *
+ * 1. The payload dir is empty (nobody ran `scripts/fetch-engine.sh`), so the app builds
+ *    fine and then fails on-device with NATIVE_ENGINE_FAILED.
+ * 2. A file is there but not named `lib*.so`. Packaging it under `lib/<abi>/` is not
+ *    enough: for a non-debuggable package Android's installer only extracts entries
+ *    whose base name starts with `lib` and ends with `.so`
+ *    (frameworks/base, libs/androidfw/ApkParsing.cpp, ValidLibraryPathLastSlash()), so
+ *    a `proot` / `loader` / `libtalloc.so.2` payload never reaches nativeLibraryDir.
+ *    Debug builds relax that filter, which is exactly why this bug survives testing.
+ *
+ * Release builds fail hard; debug builds only warn, so contributors can still work on
+ * UI without fetching GPL binaries.
+ */
+val engineAbis = listOf("arm64-v8a")
+
+fun engineProblems(): List<String> = engineAbis.flatMap { abi ->
+    val dir = file("src/main/resources/lib/$abi")
+    val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
+    when {
+        files.isEmpty() -> listOf(
+            "No PRoot engine payload in src/main/resources/lib/$abi/ — " +
+                "run ./scripts/fetch-engine.sh $abi"
+        )
+        else -> files.map { it.name }
+            .filterNot { it.startsWith("lib") && it.endsWith(".so") }
+            .map {
+                "src/main/resources/lib/$abi/$it is not named lib*.so, so Android will " +
+                    "not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
+            }
+    }
+}
+
+val verifyEnginePayload by tasks.registering {
+    group = "verification"
+    description = "Fails the build when the PRoot engine payload is missing or misnamed."
+    // Resolved at configuration time so the task carries no Project reference into the
+    // execution phase (configuration-cache safe).
+    val problems = provider { engineProblems() }
+    doLast {
+        val found = problems.get()
+        if (found.isNotEmpty()) {
+            throw org.gradle.api.GradleException(
+                "Engine payload check failed:\n  - " + found.joinToString("\n  - ") +
+                    "\nThe APK would install without a runnable engine and fail at START " +
+                    "with NATIVE_ENGINE_FAILED (see docs/DECISIONS.md ADR-022)."
+            )
+        }
+    }
+}
+
+val warnEnginePayload by tasks.registering {
+    description = "Warns (without failing) when a debug build has no usable engine payload."
+    val problems = provider { engineProblems() }
+    doLast { problems.get().forEach { logger.warn("WARNING: $it") } }
+}
+
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }
+    .configureEach { dependsOn(verifyEnginePayload) }
+
+tasks.matching { it.name == "assembleDebug" }
+    .configureEach { dependsOn(warnEnginePayload) }
+
+/**
  * CI reads the console, not the HTML report, so a failing test has to explain itself there:
  * full exception messages and stack traces (one summarized line is not a diagnosis), plus
  * anything a test prints on purpose.

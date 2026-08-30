@@ -229,7 +229,7 @@ the app's own data dir) is denied by SELinux — `neverallow { all_untrusted_app
 `chmod 0700` cannot rescue a `filesDir` copy; exactly `error=13, Permission denied`.
 
 ```
-app/src/main/resources/lib/<abi>/{proot, loader, tini, libtalloc.so.2, libandroid-shmem.so}
+app/src/main/resources/lib/<abi>/{libproot.so, libprootloader.so, libtini.so, libtalloc.so, libandroid-shmem.so}
         │ packaged verbatim at APK lib/<abi>/ (AGP only zips *.so from jniLibs,
         │ so the payload uses resources/lib/<abi>/ — the wrap.sh route)
         │ `extractNativeLibs=true` → PackageManager extracts at install

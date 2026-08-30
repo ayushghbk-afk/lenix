@@ -29,17 +29,79 @@ import java.io.RandomAccessFile
 object NativeSetup {
 
     const val NATIVE_DIR = "native"
-    const val PROOT = "proot"
+
+    /**
+     * Engine payload file names.
+     *
+     * They **must** look like `lib*.so` even though they are executables, not libraries.
+     * The package manager does not extract everything under the APK's `lib/<abi>/`: for a
+     * non-debuggable package `NativeLibrariesIterator` keeps only entries whose base name
+     * starts with `lib` and ends with `.so`
+     * (`frameworks/base` → `libs/androidfw/ApkParsing.cpp`, `ValidLibraryPathLastSlash()`).
+     * A payload shipped as `proot` / `loader` / `libtalloc.so.2` is packaged into the APK
+     * but silently **never extracted** to `ApplicationInfo.nativeLibraryDir`, so the app
+     * reports "No PRoot engine found" on every release build. Debug builds hide the bug:
+     * `debuggable` relaxes that filter, so the old names work in development only.
+     *
+     * The names are arbitrary as far as the engine is concerned — PRoot is exec'd by
+     * absolute path and its loader is pinned through `$PROOT_LOADER` — so `lib*.so`
+     * costs nothing. Only the `.so` DT_NEEDED entries have to agree with the file names,
+     * which `scripts/fetch-engine.sh` guarantees when it stages the payload.
+     */
+    const val PROOT = "libproot.so"
 
     /** PRoot's static runtime loader — must be exec-able, so it ships in the APK payload. */
-    const val PROOT_LOADER = "loader"
-    const val TINI = "tini"
-    const val BUSYBOX = "busybox"
+    const val PROOT_LOADER = "libprootloader.so"
+    const val TINI = "libtini.so"
+    const val BUSYBOX = "libbusybox.so"
 
     /** Bionic shared-library dependencies of the Termux PRoot build (H1c). */
-    const val LIB_TALLOC = "libtalloc.so.2"
+    const val LIB_TALLOC = "libtalloc.so"
     const val LIB_ANDROID_SHMEM = "libandroid-shmem.so"
-    val BIONIC_DEPS = listOf(LIB_TALLOC, LIB_ANDROID_SHMEM)
+
+    /**
+     * Historic payload names, still accepted when they are actually present.
+     *
+     * Debug builds do extract them (the `lib*.so` filter is skipped for debuggable
+     * packages) and `filesDir/native/<abi>` installs from older dev setups use them, so
+     * resolution falls back to them instead of failing on a payload that is right there.
+     */
+    val PROOT_NAMES = listOf(PROOT, "proot")
+    val PROOT_LOADER_NAMES = listOf(PROOT_LOADER, "loader")
+    val TINI_NAMES = listOf(TINI, "tini")
+    val BUSYBOX_NAMES = listOf(BUSYBOX, "busybox")
+
+    /** A shared-library dependency of the engine and the file names it may carry. */
+    data class EngineDep(val canonical: String, val aliases: List<String> = emptyList()) {
+        val candidates: List<String> get() = listOf(canonical) + aliases
+    }
+
+    val BIONIC_DEPS = listOf(
+        EngineDep(LIB_TALLOC, listOf("libtalloc.so.2")),
+        EngineDep(LIB_ANDROID_SHMEM),
+    )
+
+    /**
+     * True when Android's package manager extracts `name` from the APK's `lib/<abi>/`
+     * into `nativeLibraryDir` for a **release** (non-debuggable) build.
+     *
+     * Mirrors `ValidLibraryPathLastSlash()`: base name starts with `lib`, ends with
+     * `.so`, and contains only characters `isFilenameSafe()` accepts.
+     */
+    fun isExtractablePayloadName(name: String): Boolean =
+        name.startsWith("lib") &&
+            name.endsWith(".so") &&
+            name.length >= "lib.so".length &&
+            name.all { c ->
+                // isFilenameSafe() is ASCII-only; `Char.isLetterOrDigit()` would also
+                // accept non-ASCII letters that the installer rejects.
+                c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' ||
+                    c == '+' || c == ',' || c == '-' || c == '.' || c == '=' || c == '_'
+            }
+
+    /** First existing file among [names] in [dir], or null when none is present. */
+    fun findPayloadFile(dir: File, names: List<String>): File? =
+        names.asSequence().map { File(dir, it) }.firstOrNull { it.isFile }
 
     /** Environment variables consumed by proot's runtime (src/execve/enter.c). */
     const val ENV_PROOT_LOADER = "PROOT_LOADER"

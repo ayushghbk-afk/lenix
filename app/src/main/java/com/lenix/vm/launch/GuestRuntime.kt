@@ -41,7 +41,8 @@ class GuestRuntime(
             throw VmException(
                 VmError.NATIVE_ENGINE_FAILED,
                 "The PRoot engine for $abi is not on this device. Ship the engine payload " +
-                    "(proot + loader) under app/src/main/resources/lib/$abi/ and rebuild.",
+                    "(${NativeSetup.PROOT} + ${NativeSetup.PROOT_LOADER}) under " +
+                    "app/src/main/resources/lib/$abi/ and rebuild.",
             )
         }
         val vncPort = if (desktop) portAllocator() else null

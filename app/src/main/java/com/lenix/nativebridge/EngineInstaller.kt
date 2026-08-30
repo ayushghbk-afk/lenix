@@ -62,21 +62,22 @@ object EngineInstaller {
     ): EngineStatus {
         // 1. Signed APK payload (the only location Android 10+ allows exec from).
         if (nativeLibDir != null && nativeLibDir.isDirectory) {
-            val proot = File(nativeLibDir, NativeSetup.PROOT)
+            val proot = NativeSetup.findPayloadFile(nativeLibDir, NativeSetup.PROOT_NAMES)
+                ?: File(nativeLibDir, NativeSetup.PROOT)
             if (NativeSetup.isMachineCompatibleElf(proot, abi)) {
-                val loader = File(nativeLibDir, NativeSetup.PROOT_LOADER)
-                val loaderValid = NativeSetup.isMachineCompatibleElf(loader, abi)
+                val loader = NativeSetup.findPayloadFile(nativeLibDir, NativeSetup.PROOT_LOADER_NAMES)
+                val loaderValid = loader != null && NativeSetup.isMachineCompatibleElf(loader, abi)
                 val caveats = mutableListOf<String>().apply {
                     // A bionic-linked PRoot needs its shared libraries next to it. Without
                     // them the process cannot even start, so this must block `isReady`.
                     if (NativeSetup.isBionicExecutable(proot, abi)) {
                         val missing = NativeSetup.BIONIC_DEPS.filter { dep ->
-                            !File(nativeLibDir, dep).isFile
+                            NativeSetup.findPayloadFile(nativeLibDir, dep.candidates) == null
                         }
                         if (missing.isNotEmpty()) {
                             add("its shared library " +
                                 (if (missing.size == 1) "dependency is" else "dependencies are") +
-                                " missing: ${missing.joinToString()}")
+                                " missing: ${missing.joinToString { it.canonical }}")
                         }
                     }
                     if (!loaderValid) {
@@ -92,12 +93,14 @@ object EngineInstaller {
                         null
                     } else {
                         "PRoot '$abi' payload is present but ${caveats.joinToString("; ")} — " +
-                            "guest binaries cannot start. Ship the missing files next to `proot` " +
-                            "in app/src/main/resources/lib/$abi/."
+                            "guest binaries cannot start. Ship the missing files (named " +
+                            "lib*.so so Android extracts them) next to ${NativeSetup.PROOT} " +
+                            "in app/src/main/resources/lib/$abi/ — run scripts/fetch-engine.sh."
                     },
                 )
             }
-            val payloadProot = File(nativeLibDir, NativeSetup.PROOT)
+            val payloadProot = NativeSetup.findPayloadFile(nativeLibDir, NativeSetup.PROOT_NAMES)
+                ?: File(nativeLibDir, NativeSetup.PROOT)
             if (payloadProot.exists() && !NativeSetup.isElf(payloadProot)) {
                 return EngineStatus(
                     available = false,
@@ -130,30 +133,54 @@ object EngineInstaller {
         //    (exec'd for every guest binary) has no `/system/bin/linker64` relay — only
         //    the signed APK payload is exec-able. Keep it as the JVM/desktop fallback.
         val legacyDir = NativeSetup.nativeDir(filesDir, abi)
-        val legacyProot = File(legacyDir, NativeSetup.PROOT)
+        val legacyProot = NativeSetup.findPayloadFile(legacyDir, NativeSetup.PROOT_NAMES)
+            ?: File(legacyDir, NativeSetup.PROOT)
         if (NativeSetup.isMachineCompatibleElf(legacyProot, abi)) {
             if (isAndroid) {
                 return NOT_AVAILABLE.copy(
                     reason = "A $abi engine exists at ${legacyProot.absolutePath}, but " +
                         "Android 10+ denies execve from app data and PRoot's static loader " +
                         "cannot be relayed through /system/bin/linker64. Ship the engine " +
-                        "payload (proot + loader + .so deps) in app/src/main/resources/lib/$abi/ " +
+                        "payload (${NativeSetup.PROOT} + ${NativeSetup.PROOT_LOADER} + .so deps) in " +
+                        "app/src/main/resources/lib/$abi/ " +
                         "and rebuild (ADR-021).",
                 )
             }
-            val loader = File(legacyDir, NativeSetup.PROOT_LOADER)
+            val loader = NativeSetup.findPayloadFile(legacyDir, NativeSetup.PROOT_LOADER_NAMES)
             return EngineStatus(
                 available = true,
                 proot = legacyProot,
-                loader = loader.takeIf { NativeSetup.isMachineCompatibleElf(loader, abi) },
+                loader = loader?.takeIf { NativeSetup.isMachineCompatibleElf(it, abi) },
                 source = Source.LEGACY_FILES_DIR,
             )
         }
 
+        // Nothing anywhere. The most common cause is not "the file was never added" but
+        // "it was added under a name Android refuses to extract": the package manager
+        // only unpacks `lib*.so` entries from the APK's lib/<abi>/ on release builds
+        // (ApkParsing.cpp), so a payload named `proot`/`loader` is packaged and then
+        // silently dropped. Say so, because the directory looks correct on disk.
+        val strayNames = nativeLibDir
+            ?.takeIf { it.isDirectory }
+            ?.listFiles()
+            .orEmpty()
+            .filter { it.isFile && !NativeSetup.isExtractablePayloadName(it.name) }
+            .map { it.name }
+            .sorted()
+        val extractionHint = if (strayNames.isEmpty()) {
+            ""
+        } else {
+            " Note: ${strayNames.joinToString()} " +
+                (if (strayNames.size == 1) "is" else "are") +
+                " present but not named lib*.so, which Android only extracts on " +
+                "debuggable builds."
+        }
         return NOT_AVAILABLE.copy(
             reason = "No PRoot engine for '$abi' was found. Add the engine payload " +
-                "(proot, loader and PRoot's .so dependencies) under " +
-                "app/src/main/resources/lib/$abi/ — run scripts/fetch-engine.sh — and rebuild.",
+                "(${NativeSetup.PROOT}, ${NativeSetup.PROOT_LOADER} and PRoot's .so " +
+                "dependencies) under app/src/main/resources/lib/$abi/ — run " +
+                "scripts/fetch-engine.sh — and rebuild. Payload files must be named " +
+                "lib*.so or Android will not extract them from the APK.$extractionHint",
         )
     }
 }

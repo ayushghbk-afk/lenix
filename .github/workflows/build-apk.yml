@@ -35,6 +35,12 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x gradlew
 
+      # Without this the APK ships with an empty lib/arm64-v8a/ and the app dies at
+      # START with NATIVE_ENGINE_FAILED ("No PRoot engine for 'arm64-v8a' was found").
+      # The payload is not committed (GPL binaries, ~1 MB), so CI has to fetch it.
+      - name: Fetch PRoot engine payload
+        run: ./scripts/fetch-engine.sh arm64-v8a
+
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
 
