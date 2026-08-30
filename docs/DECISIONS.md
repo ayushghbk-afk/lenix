@@ -363,8 +363,9 @@ guest ELFs) stays allowed there.
 
 **Decision:** Engine binaries ship as **native library payloads** — drop
 `proot` (+ static `loader`, `tini`, `libtalloc.so.2`, `libandroid-shmem.so`) into
-`app/src/main/jniLibs/<abi>/` (not `jniLibs/`: AGP only packages `*.so` from there;
-`jniLibs/<abi>/` is the documented wrap.sh route into the APK's `lib/<abi>/`).
+`app/src/main/resources/lib/<abi>/` (not `jniLibs/`: AGP only packages `*.so` from
+there; `resources/lib/<abi>/` was the documented wrap.sh route into the APK's
+`lib/<abi>/`). **Superseded by ADR-022**, which moves the payload to `jniLibs/`.
 With `useLegacyPackaging = true` / `extractNativeLibs=true` the package manager
 extracts the whole `lib/<abi>/` to `/data/app/<pkg>/lib/<abi>/`
 (`ApplicationInfo.nativeLibraryDir`), which is labelled `apk_data_file`; app.te keeps
@@ -389,7 +390,7 @@ artifacts). The app:
   that must run from app data (the Termux termux-exec mechanism);
 - refuses to auto-download "engines": the old `DEFAULT_ENGINE_URLS` were 404s and an
   unsigned binary download is a supply-chain risk. `scripts/fetch-engine.sh` now
-  unpacks the real Termux PRoot `.deb` into `jniLibs/<abi>/` at build time and
+  unpacks the real Termux PRoot `.deb` into the payload dir at build time and
   validates the ELF machine;
 
 **Consequences:** The bundled `assets/native/arm64-v8a/proot` (a 770-byte shell
@@ -401,18 +402,25 @@ JVM-tested.
 
 ---
 
-## ADR-022 — Engine payload files are named `lib*.so` and CI fetches them (accepted)
+## ADR-022 — Engine payload: `jniLibs/`, named `lib*.so`, fetched by the build (accepted)
 
-**Context:** ADR-021 put the engine in `app/src/main/jniLibs/<abi>/`, but START
+**Context:** ADR-021 put the engine in `app/src/main/resources/lib/<abi>/`, but START
 still failed with `No PRoot engine for 'arm64-v8a' was found` and AUTOFIX ENGINE could
-never clear it. Two independent defects:
+never clear it. Three independent defects, each fatal on its own:
 
 1. **Nothing ever ran `scripts/fetch-engine.sh`.** The directory held only `.gitkeep`
    (the binaries are GPL and deliberately untracked) and no workflow fetched them, so
    every CI APK — debug *and* release — shipped an empty `lib/arm64-v8a/`. AUTOFIX only
    re-validates the payload; it cannot download an engine (by design, see ADR-021), so
    the button was guaranteed to fail.
-2. **The payload names could never have been extracted.** Landing a file in the APK's
+
+2. **`resources/lib/<abi>/` was no longer packaged at all.** AGP does not copy that
+   directory into the APK's `lib/<abi>/` any more, so the wrap.sh-style route ADR-021
+   chose produced an APK whose `lib/arm64-v8a/` held only a dependency's
+   `libandroidx.graphics.path.so` — and no engine. Verified by inspecting the built
+   artifact in CI, not by reading the config.
+
+3. **The payload names could never have been extracted.** Landing a file in the APK's
    `lib/<abi>/` is not enough. For a non-debuggable package the installer's
    `NativeLibrariesIterator` keeps only entries whose base name starts with `lib` and
    ends with `.so` (`frameworks/base` → `libs/androidfw/ApkParsing.cpp`,
@@ -423,6 +431,10 @@ never clear it. Two independent defects:
 
 **Decision:**
 
+- Ship the payload from `app/src/main/jniLibs/<abi>/`, the supported path, which
+  packages every `*.so` it finds. Avoiding `jniLibs` was only ever necessary because
+  AGP drops non-`.so` files there — which no longer applies once the executables are
+  named `lib*.so`.
 - Ship every payload file as `lib*.so`: `libproot.so`, `libprootloader.so`,
   `libtalloc.so`, `libandroid-shmem.so`, `libtini.so`, `libbusybox.so`. The names are
   arbitrary to PRoot (exec'd by absolute path, loader pinned via `$PROOT_LOADER`), but
@@ -443,7 +455,12 @@ never clear it. Two independent defects:
   any files present that are *not* `lib*.so` — the directory looks correct on disk, so
   the message has to name the real cause.
 
-**Consequences:** Release APKs now actually contain a runnable engine, and the two
+- `scripts/verify-apk-engine.sh` opens the **built APK** after `assembleDebug` and
+  asserts `lib/<abi>/libproot.so` is present and that nothing there would be skipped by
+  the installer, emitting `::error::` so CI annotations carry the reason. The
+  source-tree checks alone would have passed for all three defects above.
+
+**Consequences:** Release APKs now actually contain a runnable engine, and all three
 failure modes are caught at build time instead of on a user's device. `NativeSetup`
 constants are the single source of truth for the names, shared by the installer, the
 fetch script (by convention) and the tests that assert every shipped name survives the
