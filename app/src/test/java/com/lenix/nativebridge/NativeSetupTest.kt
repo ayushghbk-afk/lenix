@@ -76,6 +76,7 @@ class NativeSetupTest {
             bionicElf(NativeSetup.EM_AARCH64, "/system/bin/linker64"),
         )
         payload.resolve(NativeSetup.PROOT_LOADER).writeBytes(staticElf(NativeSetup.EM_AARCH64))
+        writeBionicDeps(payload)
         // A legacy copy that must NOT win.
         val legacy = NativeSetup.nativeDir(files)
         legacy.mkdirs()
@@ -97,6 +98,7 @@ class NativeSetupTest {
         payload.resolve(NativeSetup.PROOT).writeBytes(
             bionicElf(NativeSetup.EM_AARCH64, "/system/bin/linker64"),
         )
+        writeBionicDeps(payload)
 
         val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
 
@@ -173,6 +175,62 @@ class NativeSetupTest {
 
         assertFalse(status.available)
         assertTrue(status.reason!!.contains("cannot be relayed"))
+    }
+
+    @Test
+    fun `isReady is false when a valid payload reports a caveat`() {
+        val files = tmp.newFolder("files_ready")
+        val payload = tmp.newFolder("payload_ready")
+        payload.resolve(NativeSetup.PROOT).writeBytes(
+            bionicElf(NativeSetup.EM_AARCH64, "/system/bin/linker64"),
+        )
+
+        // Fully stocked: proot, loader and bionic deps -> ready.
+        payload.resolve(NativeSetup.PROOT_LOADER).writeBytes(staticElf(NativeSetup.EM_AARCH64))
+        writeBionicDeps(payload)
+        assertTrue(EngineInstaller.ensureEngine(files, "arm64-v8a", payload).isReady)
+
+        // Missing loader -> available still true, but not ready.
+        payload.resolve(NativeSetup.PROOT_LOADER).delete()
+        val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
+        assertTrue(status.available)
+        assertFalse(status.isReady)
+        assertTrue(status.reason!!.contains("loader"))
+    }
+
+    @Test
+    fun `isReady is false when bionic dependencies are missing`() {
+        val files = tmp.newFolder("files_deps")
+        val payload = tmp.newFolder("payload_deps")
+        payload.resolve(NativeSetup.PROOT).writeBytes(
+            bionicElf(NativeSetup.EM_AARCH64, "/system/bin/linker64"),
+        )
+        payload.resolve(NativeSetup.PROOT_LOADER).writeBytes(staticElf(NativeSetup.EM_AARCH64))
+
+        val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
+
+        assertFalse(status.isReady)
+        assertTrue(status.reason!!.contains(NativeSetup.LIB_TALLOC))
+        assertTrue(status.reason!!.contains(NativeSetup.LIB_ANDROID_SHMEM))
+    }
+
+    @Test
+    fun `static proot needs no bionic shared libraries`() {
+        val files = tmp.newFolder("files_static")
+        val payload = tmp.newFolder("payload_static")
+        payload.resolve(NativeSetup.PROOT).writeBytes(staticElf(NativeSetup.EM_AARCH64))
+        payload.resolve(NativeSetup.PROOT_LOADER).writeBytes(staticElf(NativeSetup.EM_AARCH64))
+
+        val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
+
+        assertTrue(status.isReady)
+        assertTrue(status.available)
+        assertNull(status.reason)
+    }
+
+    private fun writeBionicDeps(payload: File) {
+        payload.resolve(NativeSetup.LIB_TALLOC).writeBytes(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))
+        payload.resolve(NativeSetup.LIB_ANDROID_SHMEM).writeBytes(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))
     }
 
     // ---- synthetic ELF builders -------------------------------------------------

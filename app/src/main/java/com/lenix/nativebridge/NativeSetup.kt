@@ -36,6 +36,11 @@ object NativeSetup {
     const val TINI = "tini"
     const val BUSYBOX = "busybox"
 
+    /** Bionic shared-library dependencies of the Termux PRoot build (H1c). */
+    const val LIB_TALLOC = "libtalloc.so.2"
+    const val LIB_ANDROID_SHMEM = "libandroid-shmem.so"
+    val BIONIC_DEPS = listOf(LIB_TALLOC, LIB_ANDROID_SHMEM)
+
     /** Environment variables consumed by proot's runtime (src/execve/enter.c). */
     const val ENV_PROOT_LOADER = "PROOT_LOADER"
     const val ENV_PROOT_TMP_DIR = "PROOT_TMP_DIR"
