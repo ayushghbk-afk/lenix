@@ -269,67 +269,21 @@ tasks.matching { it.name == "assembleDebug" }
  * Verifies the *built APK*, not the source tree.
  *
  * The source-tree checks above can pass while the APK still ends up without a usable
- * engine (a packaging rule drops `resources/lib/`, a file gets renamed, AGP changes
- * behaviour). This opens the real archive and asserts `lib/<abi>/` contains an entry
- * Android will actually extract — the property the whole fix depends on.
- *
- * Failures are also echoed as `::error::` workflow commands so the reason shows up in
- * the run's annotations, not just in the (often unreachable) raw log.
+ * engine (a packaging rule drops `resources/lib/`, a file gets renamed, the fetch runs
+ * after packaging). `scripts/verify-apk-engine.sh` opens the real archive and asserts
+ * `lib/<abi>/` contains an entry Android will actually extract, emitting `::error::`
+ * so the reason shows up in CI annotations.
  */
-val verifyApkEngine by tasks.registering {
+val verifyApkEngine by tasks.registering(Exec::class) {
     group = "verification"
     description = "Asserts the built APK carries an extractable engine under lib/<abi>/."
 
     val abi: String = engineAbis.first()
-    val apkDirFile: File = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
-    val sourcePayload: File = file("src/main/resources/lib/$abi")
-    val requiredEntry = "lib/" + abi + "/libproot.so"
+    val script: File = rootProject.file("scripts/verify-apk-engine.sh")
+    val apkDir: File = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
 
-    doLast {
-        val staged: List<String> = (sourcePayload.list() ?: arrayOf<String>()).sorted()
-        logger.lifecycle("Engine payload staged in source tree: " + staged.joinToString())
-
-        val apks: List<File> = (apkDirFile.listFiles() ?: arrayOf<File>())
-            .filter { f -> f.name.endsWith(".apk") }
-        if (apks.isEmpty()) {
-            throw org.gradle.api.GradleException("No debug APK found in " + apkDirFile.path)
-        }
-
-        for (apk in apks) {
-            val names = ArrayList<String>()
-            val zip = java.util.zip.ZipFile(apk)
-            try {
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val entryName = entries.nextElement().name
-                    if (entryName.startsWith("lib/" + abi + "/")) {
-                        names.add(entryName.substringAfterLast("/"))
-                    }
-                }
-            } finally {
-                zip.close()
-            }
-
-            val problem: String? = when {
-                !names.contains("libproot.so") ->
-                    apk.name + " has no " + requiredEntry + " - the app would fail at START " +
-                        "with NATIVE_ENGINE_FAILED. lib/" + abi + "/ contains: " +
-                        names.joinToString() + " | staged in source tree: " + staged.joinToString()
-                names.any { n -> !(n.startsWith("lib") && n.endsWith(".so")) } ->
-                    apk.name + " packages entries under lib/" + abi + "/ that Android will not " +
-                        "extract on a release build (ADR-022): " +
-                        names.filter { n -> !(n.startsWith("lib") && n.endsWith(".so")) }
-                            .joinToString()
-                else -> null
-            }
-
-            if (problem != null) {
-                logger.error("::error::" + problem)
-                throw org.gradle.api.GradleException(problem)
-            }
-            logger.lifecycle("Engine payload verified in " + apk.name + ": " + names.sorted().joinToString())
-        }
-    }
+    onlyIf { apkDir.isDirectory }
+    commandLine("bash", script.absolutePath, apkDir.absolutePath, abi)
 }
 
 tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(verifyApkEngine) }
