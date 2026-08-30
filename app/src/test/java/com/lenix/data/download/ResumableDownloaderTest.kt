@@ -231,8 +231,8 @@ class ResumableDownloaderTest {
         val layer = spec()
         cache.partFile(layer.sha256).writeBytes(data.copyOfRange(0, 1234))
 
-        // A resumable server that never delivers a body byte within the read
-        // timeout — every attempt times out streaming the layer.
+        // Every response transfers only half the remaining bytes and then severs
+        // the socket mid-body: a plain mid-stream I/O failure, no timers needed.
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val from = request.getHeader("Range")
@@ -243,23 +243,19 @@ class ResumableDownloaderTest {
                     .setHeader("ETag", "\"v1\"")
                     .setHeader("Content-Range", "bytes $from-${data.size - 1}/${data.size}")
                     .setBody(Buffer().write(data.copyOfRange(from.toInt(), data.size)))
-                    .throttleBody(1, 10, TimeUnit.SECONDS)
+                    .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
             }
         }
-        val impatientClient = OkHttpClient.Builder()
-            .retryOnConnectionFailure(false)
-            .readTimeout(300, TimeUnit.MILLISECONDS)
-            .build()
 
         val exception = assertThrows(VmException::class.java) {
-            runBlocking { downloader(cache, maxAttempts = 2, client = impatientClient).download(layer) }
+            runBlocking { downloader(cache, maxAttempts = 2).download(layer) }
         }
 
         assertEquals(VmError.NETWORK_ERROR, exception.error)
         assertEquals(2, server.requestCount)
-        // Both timed-out attempts received exactly one body byte — mockwebserver
-        // writes the first throttle chunk immediately, then sleeps — so the
-        // resume point survived: the original 1234 bytes plus what arrived.
+        // Each severed attempt kept the bytes that did arrive, so the resume
+        // point advanced past the original 1234 bytes but never restarted from
+        // zero (half, then half of the remainder: ~75k bytes on disk).
         val partLength = cache.partFile(layer.sha256).length()
         assertTrue("resume point survived: $partLength bytes", partLength in 1234L until data.size.toLong())
     }

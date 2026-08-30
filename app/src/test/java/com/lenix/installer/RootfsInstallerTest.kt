@@ -182,7 +182,11 @@ class RootfsInstallerTest {
                         .setResponseCode(200)
                         .setHeader("ETag", "\"v1\"")
                         .setBody(Buffer().write(desktop))
-                        .throttleBody(1, 10, TimeUnit.SECONDS)
+                        // One byte every 500ms: the first byte lands immediately,
+                        // the next never arrives within the client's 300ms read
+                        // timeout — and the server wakes quickly enough after the
+                        // client hangs up that tearDown's shutdown() stays clean.
+                        .throttleBody(1, 500, TimeUnit.MILLISECONDS)
                 }
                 return RangeFileServer(files).dispatch(request)
             }
