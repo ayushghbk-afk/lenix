@@ -3,7 +3,7 @@ package com.lenix.installer
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.node.BigDecimalNode
+import com.fasterxml.jackson.databind.node.DecimalNode
 import com.fasterxml.jackson.databind.node.BigIntegerNode
 import com.fasterxml.jackson.databind.node.DoubleNode
 import com.fasterxml.jackson.databind.node.FloatNode
@@ -107,7 +107,7 @@ object RootfsManifestCanonicalizer {
      * across re-formatting and identical to what the Python signer produces.
      */
     private fun numberText(node: JsonNode): String = when (node) {
-        is BigDecimalNode -> node.decimalValue().toString()
+        is DecimalNode -> node.decimalValue().toString()
         is BigIntegerNode -> node.bigIntegerValue().toString()
         is IntNode -> node.asInt().toString()
         is LongNode -> node.asLong().toString()
@@ -138,7 +138,7 @@ object RootfsManifestCanonicalizer {
 
     private fun appendUnicodeEscape(code: Int, out: StringBuilder) {
         out.append("\\u")
-        for (shift in 12 down 0 step 4) {
+        for (shift in 12 downTo 0 step 4) {
             out.append("0123456789abcdef"[(code shr shift) and 0xF])
         }
     }

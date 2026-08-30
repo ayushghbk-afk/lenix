@@ -204,7 +204,7 @@ class ManifestSignature(
 
 /**
  * The set of public keys this build trusts to sign RootFS manifests
- * (`assets/rootfs/keys/*.pub`, bundled with the APK).
+ * (the `*.pub` files under `assets/rootfs/keys/`, bundled with the APK).
  *
  * An empty ring is not a "skip verification" switch — it rejects every manifest, which
  * is the right failure for a build whose trust anchors were stripped.
