@@ -55,6 +55,10 @@ Thumbs.db
 *.so
 *.a
 libs/
-dist/native-pkgs/
+
+# ...but engine payloads under app/src/main/resources/lib/<abi>/ MUST be tracked: they
+# ship inside the signed APK (ADR-021), so they are not build artifacts to ignore.
+!app/src/main/resources/lib/**/*.so
+!app/src/main/resources/lib/**/*.so.*
 dist/rootfs/layers/
 dist/rootfs/manifests/**.sig

@@ -29,7 +29,12 @@ class GuestRuntimeTest {
         val files = tmp.newFolder("files")
         val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
         installReady(manager)
-        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = MissingEngine())
+        val runtime = GuestRuntime(
+            filesDir = files,
+            manager = manager,
+            engine = MissingEngine(),
+            nativeLibDir = null,
+        )
         try {
             runtime.start(manager.selectedInstance().id, desktop = false)
             throw AssertionError("expected VmException")
@@ -86,13 +91,13 @@ class GuestRuntimeTest {
     }
 
     private class MissingEngine : GuestEngine {
-        override fun isAvailable(filesDir: File, abi: String) = false
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = false
         override fun launch(request: LaunchRequest): GuestSession = error("unused")
     }
 
     private class RecordingEngine : GuestEngine {
         var last: LaunchRequest? = null
-        override fun isAvailable(filesDir: File, abi: String) = true
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
         override fun launch(request: LaunchRequest): GuestSession {
             last = request
             return FakeSession(request.vncPort)

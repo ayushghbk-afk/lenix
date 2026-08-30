@@ -1,26 +1,14 @@
 package com.lenix
 
 import android.app.Application
-import android.os.Build
-import com.lenix.nativebridge.EngineInstaller
 import com.lenix.nativebridge.NativeBridge
-import com.lenix.nativebridge.NativeSetup
 
 class LenixApp : Application() {
     override fun onCreate() {
         super.onCreate()
         NativeBridge.tryLoad()
-        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
-        EngineInstaller.ensureOrInstallEngine(
-            filesDir = filesDir,
-            abi = abi,
-            openAsset = { path ->
-                try {
-                    assets.open(path)
-                } catch (_: Exception) {
-                    null
-                }
-            },
-        )
+        // The PRoot engine itself is validated + resolved at START time by
+        // EngineInstaller.ensureEngine() (see docs/DECISIONS.md ADR-021): on Android 10+
+        // it must be exec'd from the APK's native payload dir, not copied to filesDir.
     }
 }

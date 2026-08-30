@@ -14,7 +14,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 - Guest launch is real: `ProotCommandBuilder` + `GuestRuntime` exec `proot -r rootfs -0`
   with the documented bind mounts; missing `proot` is `NATIVE_ENGINE_FAILED`, never a fake
   RUNNING demo
-- First-run `NativeSetup` copies `assets/native/<abi>/` → `filesDir/native/<abi>/` (W^X);
+- Engine payload ships in `app/src/main/resources/lib/<abi>/` (extracted to
+  `/data/app/.../lib/<abi>/`); `NativeSetup`/`EngineInstaller` validate the ELF and
+  `execve` it from there — the only app-reachable spot Android 10+ SELinux allows
+  (ADR-021; a `filesDir` copy fails with `error=13, Permission denied`);
   `NativeBridge` loads optional `libpvmnative.so` for `openpty` / `killpg`
 - Terminal is a live `PtySession` on the guest stdio (line-mode fallback when no PTY)
 - Desktop: allocate loopback RFB port 5901–5999, start `Xvnc` + `openbox-session` inside
@@ -104,8 +107,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked.
 The PRoot command line, PTY/pipe terminal and loopback RFB viewer are in the app; a
-device still needs the `proot` binary under `assets/native/arm64-v8a/` before START can
-spawn a guest. zstd layers wait on `libpvmnative`; the pinned upstream layer is `tar.xz`.
+device still needs the `proot` binary (plus its static `loader`) under
+`app/src/main/resources/lib/arm64-v8a/` before START can spawn a guest — run
+`./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. zstd layers wait
+on `libpvmnative`; the pinned upstream layer is `tar.xz`.
 
 ## Runtime model
 

@@ -47,6 +47,15 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // Engine binaries (proot, loader, tini, libtalloc…) ship in
+        // src/main/resources/lib/<abi>/ so the APK contains them under lib/<abi>/ and the
+        // package manager EXTRACTS them to /data/app/.../lib/<abi>/ — the only
+        // app-reachable location where SELinux allows execve() on Android 10+ (ADR-021).
+        // (AGP only packages *.so from jniLibs; resources/lib/<abi>/ is the documented
+        // route for arbitrary executables — same trick as wrap.sh.)
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     lint {
