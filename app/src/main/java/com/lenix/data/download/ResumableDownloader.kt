@@ -11,10 +11,10 @@ import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import com.lenix.util.Digests
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -291,7 +291,7 @@ class ResumableDownloader(
     }
 
     private fun matchesDigest(file: File, expectedSha256: String): Boolean =
-        file.sha256Hex().equals(expectedSha256, ignoreCase = true)
+        Digests.sha256Hex(file).equals(expectedSha256, ignoreCase = true)
 
     private fun parseContentRange(header: String?): Pair<Long, Long>? {
         if (header == null) return null
@@ -299,19 +299,6 @@ class ResumableDownloader(
         val start = match.groupValues[1].toLongOrNull() ?: return null
         val total = match.groupValues[3].toLongOrNull() ?: return null
         return start to total
-    }
-
-    private fun File.sha256Hex(): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        inputStream().use { input ->
-            val buffer = ByteArray(CHUNK_BYTES)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     /** Enqueue-based [Call] bridge that cancels the HTTP call with the coroutine. */

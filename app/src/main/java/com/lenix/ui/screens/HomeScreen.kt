@@ -281,8 +281,22 @@ private fun VmCard(
                     Text(
                         text = when (error) {
                             VmError.INSTALL_INTERRUPTED ->
-                                "Install interrupted — completed layers are cached and " +
+                                "Install interrupted — verified layers stay cached and " +
                                     "the download resumes where it stopped."
+                            VmError.SIGNATURE_FAILED ->
+                                "This RootFS manifest is not signed by a key this build " +
+                                    "trusts, so nothing was downloaded. Re-pin the layer and " +
+                                    "sign it (scripts/sign-rootfs-manifest.sh)."
+                            VmError.UNSUPPORTED_COMPRESSION ->
+                                "This RootFS layer is compressed in a format the app cannot " +
+                                    "read yet — zstd arrives with the native engine in " +
+                                    "Phase 6. xz and gz layers work today."
+                            VmError.CHECKSUM_FAILED ->
+                                "A downloaded layer did not hash to the digest the signed " +
+                                    "manifest pins, so it was discarded. Retry the install."
+                            VmError.INSUFFICIENT_STORAGE ->
+                                "Not enough free space to extract the RootFS. Free some " +
+                                    "space, then retry — the download is already cached."
                             else -> "Error: ${error.name}"
                         },
                         style = MaterialTheme.typography.bodyMedium,

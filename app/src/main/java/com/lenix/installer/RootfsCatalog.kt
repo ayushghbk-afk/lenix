@@ -29,6 +29,14 @@ object RootfsCatalog {
 
     const val SUPPORTED_ABI = "arm64-v8a"
 
+    /**
+     * Minisign public-key document(s) embedded in the APK (`assets/<path>`) — the trust
+     * anchors for manifest signatures (Phase 4, ADR-017). Rotating a key means adding its
+     * public half here and shipping a new APK; old manifests keep verifying while the
+     * retired key stays listed.
+     */
+    const val SIGNING_KEYS_ASSET = "rootfs/keys/lenix-release-2026.pub"
+
     private const val SUPPORTED_PRODUCT_ABI = "aarch64"
 
     val options = listOf(

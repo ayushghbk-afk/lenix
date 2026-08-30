@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.lenix.installer.extract.LayerCompression
+import com.lenix.util.Digests
 
 /**
  * Parses a strict-schema RootFS manifest.
@@ -17,11 +19,32 @@ class RootfsManifestParser(
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false),
 ) {
     fun parse(json: String): RootfsManifest {
-        val manifest = objectMapper.readValue<RootfsManifest>(json)
+        val manifest = try {
+            objectMapper.readValue<RootfsManifest>(json)
+        } catch (e: Exception) {
+            // A truncated file, a missing member or a wrongly-typed field must all read as
+            // "this manifest is not a manifest", not as a Jackson internal.
+            throw IllegalArgumentException(
+                "The RootFS manifest could not be read: ${e.message ?: e.javaClass.simpleName}",
+                e,
+            )
+        }
         validate(manifest)
-        return manifest
+        // Digests are content addresses and become cache file names: normalize once, so
+        // every consumer (cache, verifier, provenance) compares the identical string.
+        return manifest.copy(
+            layers = manifest.layers.map { layer ->
+                layer.copy(sha256 = layer.sha256.trim().lowercase())
+            },
+        )
     }
 
+    /**
+     * Hard schema validation. Everything the installer will later trust with the
+     * network and the filesystem — URLs, sizes, digests — is checked here, before a
+     * signature is even looked at, so a malformed manifest cannot reach the layer
+     * cache's file naming or the downloader's offsets.
+     */
     private fun validate(manifest: RootfsManifest) {
         require(manifest.schemaVersion >= SUPPORTED_SCHEMA_VERSION) {
             "Unsupported manifest schema ${manifest.schemaVersion}; this APK supports $SUPPORTED_SCHEMA_VERSION+"
@@ -32,14 +55,41 @@ class RootfsManifestParser(
         require(manifest.signature.isNotBlank()) {
             "Manifest ${manifest.id} is missing its signature."
         }
+        require(manifest.layers.size <= MAX_LAYERS) {
+            "Manifest ${manifest.id} declares ${manifest.layers.size} layers; at most " +
+                "$MAX_LAYERS are supported."
+        }
+        val seen = HashSet<String>()
         manifest.layers.forEach { layer ->
+            require(layer.id.isNotBlank()) { "A layer has no id." }
+            require(seen.add(layer.id)) { "Layer id '${layer.id}' appears twice in the manifest." }
+            require(layer.url.startsWith("https://")) {
+                "Layer ${layer.id} would be downloaded over an insecure URL: ${layer.url}"
+            }
             require(layer.sizeBytes > 0L) { "Layer ${layer.id} has no size." }
             require(layer.uncompressedBytes > 0L) { "Layer ${layer.id} has no uncompressed size." }
-            require(layer.sha256.isNotBlank()) { "Layer ${layer.id} has no sha256." }
+            require(layer.uncompressedBytes >= layer.sizeBytes) {
+                "Layer ${layer.id} claims ${layer.uncompressedBytes} uncompressed bytes for " +
+                    "${layer.sizeBytes} compressed bytes — that cannot be a real archive."
+            }
+            require(Digests.isSha256Hex(layer.sha256.trim())) {
+                "Layer ${layer.id} has no usable sha256 digest ('${layer.sha256}')."
+            }
+            require(LayerCompression.isKnown(layer.compression)) {
+                "Layer ${layer.id} declares unknown compression '${layer.compression}'; this " +
+                    "build reads xz, gz and plain tar (zstd lands with the native engine)."
+            }
+            require(layer.zstdLevel in 1..22) { "Layer ${layer.id} has an out-of-range zstd level." }
+        }
+        require(manifest.install.bootCommand.isNotBlank()) {
+            "Manifest ${manifest.id} has no boot command."
         }
     }
 
     companion object {
         const val SUPPORTED_SCHEMA_VERSION = 1
+
+        /** Layer count ceiling: base + desktop + headroom for a split-out flavor. */
+        const val MAX_LAYERS = 8
     }
 }

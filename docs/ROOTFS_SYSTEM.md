@@ -21,10 +21,14 @@ dist/rootfs/layers/
   re-downloading base, and swap DEs (openbox ↔ lxqt ↔ xfce) with one small layer.
 - Layers are **immutable and content-addressed** by `sha256`. The app caches them in
   `cache/layers/<sha256>.tar.zst` and reuses them across instances and re-installs.
-- Every manifest is **Ed25519-signed** (`minisign`), public key embedded in the APK
-  (`res/raw/pvm_pubkey`). Signature covers the whole manifest body, including each
-  layer's `sha256` — a tampered layer or URL fails verification before any bytes are
-  extracted.
+- Every manifest is **Ed25519-signed**, with the public keys embedded in the APK as
+  minisign key files (`assets/rootfs/keys/*.pub`; a directory, so rotation is "add a file,
+  drop a file"). The signature covers the **canonical payload** — the whole manifest body
+  with the `signature` member removed and object keys sorted — including each layer's
+  `sha256`, so a tampered digest, URL or size fails verification *before* a byte is
+  downloaded or extracted (ADR-017). Keys are minisign-format and signatures are minisign's
+  raw (non-pre-hashed) mode, i.e. `minisign -S -l -m <payload>`; the `assets` location and
+  the injected key ring are what make the check unit-testable without a `Context`.
 
 ---
 
@@ -69,6 +73,23 @@ InstallerViewModel / InstallTask  (single state machine, resumable)
 │
 └─[7] READY         HomeScreen shows [ Launch Desktop ]
 ```
+
+**As implemented (Phases 3–5).** `[1]` verifies the manifest signature *first* — before the
+storage precheck, so a rejected manifest never reserves anything (`HomeViewModel` calls the
+same verifier, so a bad manifest is an error state rather than a silent no-op). `[2]`–`[3]`
+are `data.download.ResumableDownloader` + `LayerCache` (ADR-015) plus a digest recompute on
+the cached file. `[4]` is `installer.extract.RootfsExtractor` — pure JVM
+(`commons-compress` + `org.tukaani:xz`), no JNI yet, and only `tar.xz`/`tar.gz`/`tar`;
+`tar.zst` is refused with `UNSUPPORTED_COMPRESSION` until `libpvmextract` lands in Phase 6
+(ADR-018). It keeps modes/symlinks/mtimes, normalizes ownership to the app uid implicitly,
+drops setuid/setgid, ignores xattrs, skips and counts device nodes/FIFOs, enforces a
+tar-slip-proof path policy, and caps both expansion and entry count against the manifest's
+declared size; progress is bytes written per layer, cancellation is checked per entry. `[6]`
+is the rename in `RootfsInstaller`, which also writes `rootfs.json` (per-layer
+digest/counts/signing key id) and clears the interrupted-install checkpoint. `[5]`
+(post-install guest bootstrap) belongs to the Phase 6 engine and is not run yet. Kill during
+`[4]`: the staging tree is discarded on any failure, so the next attempt re-extracts from the
+still-cached layers — download state survives, extraction state does not.
 
 **Failure semantics:** every step is idempotent. Killed during download → resume at
 byte X. Killed during extraction → staging dir is cleaned on next run, extraction
@@ -145,6 +166,19 @@ pinned in the bundled manifest (see §7).
 
 The app pins the channel URL + public key; the manifest tells it everything else
 (URLs, sizes, hashes, DE options, RAM requirements).
+
+**As implemented (Phases 3–5).** `RootfsManifestParser` rejects anything the installer would
+have to guess about: `schemaVersion` must be the supported one, `id`/`distro`/`version` and
+`install.bootCommand` must be non-blank, 1–8 layers with unique ids, `https:`-only URLs, a
+normalized 64-hex `sha256` (lowercase accepted, `Digests.isSha256Hex`), a compression the
+layer's suffix agrees with, and `sizeBytes > 0` with `uncompressedBytes ≥ sizeBytes`.
+`signingKeyVersion` is advisory — trust comes from the key id inside `signature`, which must
+name a key in the ring (a mismatch is reported with both key ids, never silently).
+`signature` is `ed25519:` + base64(`key-id ‖ signature`) over the canonical payload
+(`RootfsManifestCanonicalizer`, byte-for-byte mirrored by `scripts/canonical-json.py`), and a
+document that is unsigned, placeholder-signed, signed by an untrusted key or whose canonical
+form was altered verifies as `SIGNATURE_FAILED`. The `signature` member is excluded from the
+payload, so re-signing never invalidates itself.
 
 ## 4. Storage layout & accounting
 

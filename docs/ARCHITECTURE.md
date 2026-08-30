@@ -364,7 +364,8 @@ NOT_INSTALLED ─▶ RESERVING ─▶ DOWNLOADING ─▶ VERIFYING ─▶ EXTRAC
 
 Each transition is persisted to `state.json` **before** the operation starts. If the
 app is killed mid-install, the installer resumes at the last persisted step (download
-resumes by byte range; extraction restarts from the `.tmp` staging dir).
+resumes by byte range; extraction restarts from the `.tmp` staging dir, which is discarded on
+any failure so a half-unpacked tree is never committed).
 
 ## 8. VNC subsystem
 
@@ -415,13 +416,21 @@ resumes by byte range; extraction restarts from the `.tmp` staging dir).
 
 1. **Loopback-only VNC** with per-boot random password (12 hex chars, `0600`).
 2. **App-private storage**: `filesDir` mode 0700 semantics; no `MANAGE_EXTERNAL_STORAGE`.
-3. **Signed images**: Ed25519 signature over each manifest; public key embedded in the
-   app; `sha256` per layer verified before extraction.
-4. **No setuid, no capabilities**: guest runs as app uid; PRoot's `-0` only fakes root
+3. **Signed images**: Ed25519 signature over each manifest's *canonical payload* (the
+   manifest without its `signature` member, keys sorted); the trusted keys are minisign
+   public key files embedded in the APK (`assets/rootfs/keys/`), and verification happens
+   before any download is started — a manifest that fails it never donates a URL, a size or
+   a digest (ADR-017). `sha256` per layer is then verified against the signed manifest before
+   extraction, and again after (the cache gate).
+4. **Untrusted archives are treated as hostile input**: member names that resolve outside the
+   RootFS — including through a symlinked parent directory — are refused, setuid/setgid bits
+   are dropped, device nodes/FIFOs are skipped rather than created, and the declared
+   uncompressed size bounds how far an archive may expand (ADR-018).
+5. **No setuid, no capabilities**: guest runs as app uid; PRoot's `-0` only fakes root
    inside the emulated filesystem view.
-5. **No host fs escape paths**: only `/proc`, `/dev`, `/sys`, the instance dirs, and
-   `shared/` are exposed; `/sdcard` access via a user-granted SAF tree at most (Phase 5).
-6. **Update channel over HTTPS** with certificate pinning (app-built channel URL).
+6. **No host fs escape paths**: only `/proc`, `/dev`, `/sys`, the instance dirs, and
+   `shared/` are exposed; `/sdcard` access via a user-granted SAF tree at most (planned).
+7. **Update channel over HTTPS** with certificate pinning (app-built channel URL).
 7. **Death of the app = death of the guest** unless the user opts into the
    background-service mode (Phase 5) — mitigates "zombie Linux" battery drain.
 

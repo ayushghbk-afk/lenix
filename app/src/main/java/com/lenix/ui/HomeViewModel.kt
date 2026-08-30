@@ -12,7 +12,9 @@ import com.lenix.data.SelectionStore
 import com.lenix.installer.RootfsCatalog
 import com.lenix.installer.RootfsInstaller
 import com.lenix.installer.RootfsManifest
-import com.lenix.installer.RootfsManifestParser
+import com.lenix.installer.RootfsManifestVerifier
+import com.lenix.installer.TrustedKeyRing
+import com.lenix.installer.extract.RootfsExtractor
 import com.lenix.vm.DistroSpec
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
@@ -56,11 +58,17 @@ data class HomeUiState(
 /**
  * Keeps the monitor UI reactive without turning [MainActivity] into a giant monster.
  *
- * Owns the persisted instance manager (Phase 2) and, since Phase 3, drives the
- * real RootFS install pipeline: the bundled manifest is downloaded layer-by-layer
- * through the resumable downloader, every state transition is persisted, and an
- * interrupted install resumes at the byte it stopped at. App settings are loaded
- * from / persisted to `filesDir/settings.json` here too — one owner, one file.
+ * Owns the persisted instance manager (Phase 2) and drives the real RootFS install
+ * pipeline (Phases 3–5): the bundled manifest is signature-verified against the signing
+ * key embedded in the APK, its layers are downloaded through the resumable downloader,
+ * re-hashed, extracted into the instance's staging directory and committed atomically.
+ * Every state transition is persisted, so an interrupted install resumes where it
+ * stopped. App settings are loaded from / persisted to `filesDir/settings.json` here
+ * too — one owner, one file.
+ *
+ * This is also the only place that touches Android `Context` APIs on the install path
+ * (asset loading, `StatFs`): everything it wires up takes plain files and lambdas and is
+ * therefore JVM-unit-testable.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModel(
@@ -74,8 +82,14 @@ class HomeViewModel(
     private val settingsStore: JsonSettingsStore = JsonSettingsStore(
         File(application.filesDir, SETTINGS_FILE),
     ),
-    private val installer: RootfsInstaller = RootfsInstaller(application.filesDir),
-    private val manifestParser: RootfsManifestParser = RootfsManifestParser(),
+    private val manifestVerifier: RootfsManifestVerifier = RootfsManifestVerifier(
+        keyRing = bundledTrustedKeys(application),
+    ),
+    private val installer: RootfsInstaller = RootfsInstaller(
+        filesDir = application.filesDir,
+        manifestVerifier = manifestVerifier,
+        extractor = RootfsExtractor(freeBytes = { freeBytesOn(application.filesDir) }),
+    ),
 ) : AndroidViewModel(application) {
 
     private val vmDispatcher = Dispatchers.IO.limitedParallelism(1)
@@ -118,9 +132,15 @@ class HomeViewModel(
     /**
      * Installs (or resumes installing) the RootFS for the selected instance.
      *
-     * Runs the real pipeline from Phase 3 on: manifest → resumable download →
-     * verify → stage → commit. A retry after an interruption resumes from the
-     * layer cache and any `.part` file instead of restarting from zero.
+     * Runs the whole pipeline (docs/ROOTFS_SYSTEM.md §2): signed manifest → resumable
+     * download → re-hash → streaming extraction → atomic commit. A retry after an
+     * interruption resumes from the layer cache and any `.part` file instead of restarting
+     * the download from zero; extraction always re-runs from scratch, which is cheap and
+     * cannot leave a half-extracted tree behind.
+     *
+     * The manifest is verified here as well as inside the installer, so an untrusted or
+     * malformed manifest surfaces as an instance error before any bytes are fetched or
+     * any storage is reserved.
      */
     fun install() {
         val id = mutableHomeState.value.selectedInstance.id
@@ -145,12 +165,18 @@ class HomeViewModel(
             return
         }
 
-        val manifest = try {
-            manifestParser.parse(manifestJson)
+        val verified = try {
+            manifestVerifier.verify(manifestJson)
+        } catch (e: VmException) {
+            vmManager.markError(id, e.error)
+            message(e.message ?: "The RootFS manifest could not be verified.")
+            return
         } catch (e: Exception) {
+            vmManager.markError(id, VmError.DOWNLOAD_CORRUPTED)
             message("The bundled RootFS manifest is invalid: ${e.message}")
             return
         }
+        val manifest = verified.manifest
 
         if (mutableHomeState.value.settings.smartStorage) {
             val required = requiredBytesFor(manifest)
@@ -191,6 +217,7 @@ class HomeViewModel(
             job.cancelAndJoin()
             val id = mutableHomeState.value.selectedInstance.id
             installer.discardPartials()
+            installer.discardStaging(id)
             JsonInstallStateStore.forInstance(getApplication<Application>().filesDir, id).clear()
             val instance = vmManager.getInstance(id)
             if (instance != null && instance.state.isBusy) {
@@ -232,6 +259,7 @@ class HomeViewModel(
         if (vmManager.getInstance(id) == null) return
         viewModelScope.launch(vmDispatcher) {
             vmManager.reset(id)
+            installer.discardStaging(id)
             JsonInstallStateStore.forInstance(getApplication<Application>().filesDir, id).clear()
             mutableHomeState.update { state ->
                 state.copy(
@@ -334,8 +362,13 @@ class HomeViewModel(
 
     /**
      * After a process death mid-install, the instance recovers as
-     * ERROR/INSTALL_INTERRUPTED with a persisted checkpoint; surface that progress
-     * so the Home screen can offer RESUME at the right percentage.
+     * ERROR/INSTALL_INTERRUPTED with a persisted checkpoint; surface that progress so the
+     * Home screen can offer RESUME at the right percentage.
+     *
+     * The two phases are honest about different things: an interrupted *download* resumes
+     * at the exact byte it stopped at, while an interrupted *extraction* re-runs from
+     * scratch on top of the cached layers (ADR-018) — so the label and the bar's position
+     * are chosen per phase instead of pretending one progress scale fits both.
      */
     private fun seedInterruptedInstall() {
         val instance = vmManager.getInstance(selectedId) ?: return
@@ -346,14 +379,26 @@ class HomeViewModel(
             .forInstance(getApplication<Application>().filesDir, selectedId)
             .load() ?: return
         if (state.bytesTotal <= 0L) return
-        val fraction = (state.bytesDone.toFloat() / state.bytesTotal).coerceIn(0f, 1f)
+        val phaseFraction = (state.bytesDone.toFloat() / state.bytesTotal).coerceIn(0f, 1f)
+        val extracting = state.phase == RootfsInstaller.PHASE_EXTRACTING
+        val fraction = if (extracting) {
+            EXTRACTING_START + phaseFraction * (EXTRACTING_END - EXTRACTING_START)
+        } else {
+            phaseFraction * (MANIFEST_FRACTION + DOWNLOAD_SHARE)
+        }
+        val message = if (extracting) {
+            "Interrupted while extracting layer ${state.layerIndex + 1}/${state.layerCount} — " +
+                "the verified layers stay cached; RESUME INSTALL re-extracts the RootFS."
+        } else {
+            "Interrupted at ${(phaseFraction * 100).toInt()}% — " +
+                "tap RESUME INSTALL to continue the download where it stopped."
+        }
         mutableHomeState.update { current ->
             current.copy(
                 installProgress = HomeUiState.InstallProgress(
-                    state = VmState.DOWNLOADING,
-                    fraction = fraction,
-                    message = "Interrupted at ${(fraction * 100).toInt()}% — " +
-                        "tap RESUME INSTALL to continue where it stopped.",
+                    state = if (extracting) VmState.EXTRACTING else VmState.DOWNLOADING,
+                    fraction = fraction.coerceIn(0f, 1f),
+                    message = message,
                 ),
             )
         }
@@ -361,9 +406,18 @@ class HomeViewModel(
 
     private fun onInstallProgress(id: String, progress: RootfsInstaller.Progress) {
         when (progress) {
+            is RootfsInstaller.Progress.ManifestVerified -> {
+                vmManager.markVerifying(id)
+                updateProgress(
+                    VmState.VERIFYING,
+                    MANIFEST_FRACTION,
+                    "Manifest signed by ${progress.signer} — ${progress.layerCount} layer(s)",
+                )
+            }
+
             is RootfsInstaller.Progress.Download -> updateProgress(
                 VmState.DOWNLOADING,
-                fractionOf(progress.bytesDone, progress.bytesTotal) * DOWNLOAD_SHARE,
+                MANIFEST_FRACTION + fractionOf(progress.bytesDone, progress.bytesTotal) * DOWNLOAD_SHARE,
                 "Downloading ${progress.layerId} — ${formatBytes(progress.bytesDone)} / " +
                     "${formatBytes(progress.bytesTotal)}",
             )
@@ -375,10 +429,18 @@ class HomeViewModel(
 
             is RootfsInstaller.Progress.Extracting -> {
                 vmManager.markExtracting(id)
+                // Real per-layer progress: entries are written as they stream, so the bar
+                // moves through the whole extraction window instead of sticking at a fixed
+                // percentage.
+                val withinPhase = (progress.layerIndex.toFloat() +
+                    fractionOf(progress.layerBytesDone, progress.layerBytesTotal)) /
+                    maxOf(progress.layerCount, 1)
                 updateProgress(
                     VmState.EXTRACTING,
-                    EXTRACTING_FRACTION,
-                    "Staging RootFS (${progress.currentFile}) …",
+                    EXTRACTING_START + withinPhase.coerceIn(0f, 1f) * (EXTRACTING_END - EXTRACTING_START),
+                    "Extracting ${progress.layerId} ${progress.layerIndex + 1}/${progress.layerCount} — " +
+                        "${formatBytes(progress.layerBytesDone)} / " +
+                        "${formatBytes(progress.layerBytesTotal)}\n${progress.currentEntry}",
                 )
             }
 
@@ -418,11 +480,7 @@ class HomeViewModel(
     }
 
     /** Available bytes on the app's internal storage, or -1 when unknowable. */
-    private fun availableBytes(): Long = try {
-        StatFs(getApplication<Application>().filesDir.absolutePath).availableBytes
-    } catch (e: Exception) {
-        -1L
-    }
+    private fun availableBytes(): Long = freeBytesOn(getApplication<Application>().filesDir)
 
     private fun readAsset(path: String): String? = try {
         getApplication<Application>().assets.open(path).bufferedReader().use { it.readText() }
@@ -452,11 +510,17 @@ class HomeViewModel(
         const val SELECTION_FILE = "selected_instance"
         const val SETTINGS_FILE = "settings.json"
 
-        /** Downloading owns the first 85% of the progress bar; the rest is local work. */
-        const val DOWNLOAD_SHARE = 0.85f
-        const val VERIFYING_FRACTION = 0.9f
-        const val EXTRACTING_FRACTION = 0.93f
-        const val COMMITTING_FRACTION = 0.97f
+        /**
+         * The progress bar's segments: a sliver for the manifest check, the bulk for the
+         * download (it dominates wall-clock time), then verifying, extracting (scaled by
+         * real unpacked bytes) and the commit.
+         */
+        const val MANIFEST_FRACTION = 0.02f
+        const val DOWNLOAD_SHARE = 0.78f
+        const val VERIFYING_FRACTION = 0.85f
+        const val EXTRACTING_START = 0.85f
+        const val EXTRACTING_END = 0.96f
+        const val COMMITTING_FRACTION = 0.98f
 
         const val EXTRACTION_HEADROOM_NUMERATOR = 6L
         const val EXTRACTION_HEADROOM_DENOMINATOR = 5L
@@ -467,4 +531,27 @@ class HomeViewModel(
             else -> "$bytes B"
         }
     }
+}
+
+/** Available bytes on [dir]'s volume, or -1 when the platform cannot say (never blocks). */
+private fun freeBytesOn(dir: File): Long = try {
+    StatFs(dir.absolutePath).availableBytes
+} catch (e: Exception) {
+    -1L
+}
+
+/**
+ * The Ed25519 keys this build trusts to sign RootFS manifests, read from the APK's
+ * assets (docs/ROOTFS_SYSTEM.md §1). An unreadable or missing asset yields an empty ring,
+ * which makes every install fail as SIGNATURE_FAILED rather than silently skipping
+ * verification.
+ */
+private fun bundledTrustedKeys(application: Application): TrustedKeyRing = try {
+    val text = application.assets
+        .open(RootfsCatalog.SIGNING_KEYS_ASSET)
+        .bufferedReader()
+        .use { it.readText() }
+    TrustedKeyRing.parse(text)
+} catch (e: Exception) {
+    TrustedKeyRing.EMPTY
 }

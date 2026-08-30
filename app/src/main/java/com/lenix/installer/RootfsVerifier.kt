@@ -1,39 +1,78 @@
 package com.lenix.installer
 
+import com.lenix.util.Digests
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
 import java.io.File
-import java.security.MessageDigest
 
 /**
- * Verifies downloaded RootFS bytes before extraction.
+ * Verifies RootFS bytes against the signed manifest before they are trusted.
  *
- * Phase 1 implements SHA-256 verification of each layer against the manifest. Layer
- * signature verification (Ed25519/minisign) will be layered on the same interface in
- * a later commit without changing callers.
+ * Two independent gates, both required (docs/ROOTFS_SYSTEM.md §2 steps [2] and [3]):
+ *  * the downloader checks the digest of the bytes it streamed before a `.part` is
+ *    promoted into the content-addressed cache;
+ *  * the installer re-hashes every cached layer it is about to extract, because a cache
+ *    file can be edited, truncated or evicted between those two moments (or be written
+ *    by a *different* build with a different manifest).
+ *
+ * The manifest itself is checked before any of this, by [RootfsManifestVerifier]; the
+ * layer digests are only as trustworthy as that signature.
  */
 class RootfsVerifier {
 
+    /**
+     * Confirms [file] really is the layer the manifest describes: exact size, exact
+     * SHA-256.
+     *
+     * @return the verified byte count.
+     * @throws VmException with [VmError.DOWNLOAD_CORRUPTED] for a missing or wrong-sized
+     *   file and [VmError.CHECKSUM_FAILED] when the bytes hash to something else.
+     */
+    fun verifyLayer(file: File, layer: RootfsManifest.Layer): Long {
+        if (!file.isFile) {
+            throw VmException(
+                VmError.DOWNLOAD_CORRUPTED,
+                "Layer ${layer.id} is missing from the cache (${file.name}).",
+            )
+        }
+        val actual = file.length()
+        if (actual != layer.sizeBytes) {
+            throw VmException(
+                VmError.DOWNLOAD_CORRUPTED,
+                "Layer ${layer.id} is $actual bytes on disk; the signed manifest says " +
+                    "${layer.sizeBytes}.",
+            )
+        }
+        verifyFile(file, layer.sha256)
+        return actual
+    }
+
+    /**
+     * Confirms [file] hashes to [expectedSha256] (case-insensitive, whitespace tolerant).
+     *
+     * @throws VmException with [VmError.CHECKSUM_FAILED] on any mismatch.
+     */
     fun verifyFile(file: File, expectedSha256: String) {
-        val actualHex = sha256(file)
-        if (!actualHex.equals(expectedSha256.trim(), ignoreCase = true)) {
+        val actualHex = sha256Hex(file)
+        val expected = expectedSha256.trim()
+        if (!actualHex.equals(expected, ignoreCase = true)) {
             throw VmException(
                 VmError.CHECKSUM_FAILED,
-                "Expected $expectedSha256 but computed $actualHex for ${file.name}.",
+                "Expected $expected but computed $actualHex for ${file.name}.",
             )
         }
     }
 
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
+    /** The hex digest a manifest pins — validated here so a bad manifest fails cleanly. */
+    fun sha256Hex(file: File): String {
+        if (!file.isFile) {
+            throw VmException(VmError.DOWNLOAD_CORRUPTED, "No such file to verify: ${file.name}.")
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return Digests.sha256Hex(file)
+    }
+
+    companion object {
+        /** True when [value] can be pinned as a layer digest at all. */
+        fun isUsableDigest(value: String): Boolean = Digests.isSha256Hex(value.trim())
     }
 }

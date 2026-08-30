@@ -72,7 +72,7 @@ figure in the product brief assumes a minimal cloud image, not a desktop).
 | `mmdebstrap` / `debootstrap` | Debian/Ubuntu base layers (no root needed; deterministic with `SOURCE_DATE_EPOCH`) |
 | `apk` + `alpine-minirootfs` | Alpine base layer |
 | `qemu-user-static` + binfmt | building **opposite arch** in Docker (avoided when using GitHub arm64 runners) |
-| `minisign` (ed25519) | sign `manifest.json`; public key in `app/src/main/res/raw/pvm_pubkey` |
+| `minisign` (ed25519) | sign the manifest's canonical payload (`minisign -S -l -m`); public keys live in `app/src/main/assets/rootfs/keys/*.pub` — see `docs/BUILDING.md` and `scripts/` |
 | `zstd` CLI | layer compression, `--long=27`, `-T0` |
 | NDK r27 + CMake + `cargo-ndk` | host binaries |
 | `docker` | hermetic, reproducible layer builds |

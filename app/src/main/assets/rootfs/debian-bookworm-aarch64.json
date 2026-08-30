@@ -31,5 +31,5 @@
     "bootCommand": "/bin/bash"
   },
   "buildinfoUrl": "https://github.com/termux/proot-distro/releases/tag/v4.7.0",
-  "signature": "unsigned:phase-4"
+  "signature": "ed25519:hOuGc1JdD1ZAes6A7p/+deNReGmveXqaOo8i3APpgluO1tHQmBW2g+qN6orAtEaamyXO+mrdbYpn06CPQEYlN4lyLcPFYokE"
 }
