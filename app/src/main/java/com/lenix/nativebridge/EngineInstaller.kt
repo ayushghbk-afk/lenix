@@ -7,7 +7,7 @@ import java.io.File
  * Locates and validates the host-side PRoot engine (H1 in docs/NATIVE_BINARIES.md).
  *
  * Since Android 10 the engine must be **executed from the APK's native payload
- * directory** (`app/src/main/resources/lib/<abi>/` → `ApplicationInfo.nativeLibraryDir`,
+ * directory** (`app/src/main/jniLibs/<abi>/` → `ApplicationInfo.nativeLibraryDir`,
  * SELinux `apk_data_file`), never from `filesDir/` (ADR-021). This class therefore
  * validates the payload that the package manager extracted, not an asset copy.
  */
@@ -95,7 +95,7 @@ object EngineInstaller {
                         "PRoot '$abi' payload is present but ${caveats.joinToString("; ")} — " +
                             "guest binaries cannot start. Ship the missing files (named " +
                             "lib*.so so Android extracts them) next to ${NativeSetup.PROOT} " +
-                            "in app/src/main/resources/lib/$abi/ — run scripts/fetch-engine.sh."
+                            "in app/src/main/jniLibs/$abi/ — run scripts/fetch-engine.sh."
                     },
                 )
             }
@@ -109,7 +109,7 @@ object EngineInstaller {
                     source = Source.NONE,
                     reason = "The bundled '$abi' proot payload is not an ELF executable " +
                         "(${payloadProot.absolutePath}). Drop the real PRoot binary into " +
-                        "app/src/main/resources/lib/$abi/ and rebuild.",
+                        "app/src/main/jniLibs/$abi/ and rebuild.",
                 )
             }
             if (payloadProot.exists()) {
@@ -123,7 +123,7 @@ object EngineInstaller {
                     reason = "The bundled proot payload is for a different architecture " +
                         "(e_machine 0x${got.toString(16)}, expected $abi " +
                         "0x${want.toString(16)} at ${payloadProot.absolutePath}). Ship " +
-                        "the ${abi} build in app/src/main/resources/lib/$abi/.",
+                        "the ${abi} build in app/src/main/jniLibs/$abi/.",
                 )
             }
         }
@@ -142,7 +142,7 @@ object EngineInstaller {
                         "Android 10+ denies execve from app data and PRoot's static loader " +
                         "cannot be relayed through /system/bin/linker64. Ship the engine " +
                         "payload (${NativeSetup.PROOT} + ${NativeSetup.PROOT_LOADER} + .so deps) in " +
-                        "app/src/main/resources/lib/$abi/ " +
+                        "app/src/main/jniLibs/$abi/ " +
                         "and rebuild (ADR-021).",
                 )
             }
@@ -178,7 +178,7 @@ object EngineInstaller {
         return NOT_AVAILABLE.copy(
             reason = "No PRoot engine for '$abi' was found. Add the engine payload " +
                 "(${NativeSetup.PROOT}, ${NativeSetup.PROOT_LOADER} and PRoot's .so " +
-                "dependencies) under app/src/main/resources/lib/$abi/ — run " +
+                "dependencies) under app/src/main/jniLibs/$abi/ — run " +
                 "scripts/fetch-engine.sh — and rebuild. Payload files must be named " +
                 "lib*.so or Android will not extract them from the APK.$extractionHint",
         )

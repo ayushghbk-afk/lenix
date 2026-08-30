@@ -56,9 +56,9 @@ Thumbs.db
 *.a
 libs/
 
-# ...but engine payloads under app/src/main/resources/lib/<abi>/ MUST be tracked: they
-# ship inside the signed APK (ADR-021), so they are not build artifacts to ignore.
-!app/src/main/resources/lib/**/*.so
-!app/src/main/resources/lib/**/*.so.*
+# The engine payload under app/src/main/jniLibs/<abi>/ is fetched at build time by
+# scripts/fetch-engine.sh (GPL binaries, deliberately untracked). The generic *.so rule
+# above already ignores it; it is listed here so the intent is explicit.
+app/src/main/jniLibs/
 dist/rootfs/layers/
 dist/rootfs/manifests/**.sig

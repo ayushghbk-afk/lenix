@@ -23,7 +23,7 @@ import java.io.RandomAccessFile
  *    `system_linker_exec` workaround Termux uses).
  *
  * So engine binaries must live in the APK's native payload directory
- * (`app/src/main/resources/lib/<abi>/`, extracted to `ApplicationInfo.nativeLibraryDir`),
+ * (`app/src/main/jniLibs/<abi>/`, extracted to `ApplicationInfo.nativeLibraryDir`),
  * never in `filesDir/`. See docs/DECISIONS.md ADR-021.
  */
 object NativeSetup {

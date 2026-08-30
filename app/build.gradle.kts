@@ -47,12 +47,14 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-        // Engine binaries (proot, loader, tini, libtalloc…) ship in
-        // src/main/resources/lib/<abi>/ so the APK contains them under lib/<abi>/ and the
+        // Engine binaries (libproot.so, libprootloader.so, libtalloc.so…) ship in
+        // src/main/jniLibs/<abi>/ so the APK contains them under lib/<abi>/ and the
         // package manager EXTRACTS them to /data/app/.../lib/<abi>/ — the only
         // app-reachable location where SELinux allows execve() on Android 10+ (ADR-021).
-        // (AGP only packages *.so from jniLibs; resources/lib/<abi>/ is the documented
-        // route for arbitrary executables — same trick as wrap.sh.)
+        // They are executables named lib*.so precisely so both AGP (which packages only
+        // *.so from jniLibs) and the installer (which extracts only lib*.so) keep them.
+        // useLegacyPackaging=true forces extraction to disk instead of being loaded
+        // straight from the APK — an exec target needs a real file path (ADR-022).
         jniLibs {
             useLegacyPackaging = true
         }
@@ -150,7 +152,7 @@ val engineAbis = listOf("arm64-v8a")
 // Plain (abi -> dir) pairs resolved during configuration: the checks below run at
 // execution time and must not touch `Project` (configuration-cache safe).
 val enginePayloadDirs: List<Pair<String, File>> =
-    engineAbis.map { abi -> abi to file("src/main/resources/lib/$abi") }
+    engineAbis.map { abi -> abi to file("src/main/jniLibs/$abi") }
 
 // Pure lambda (no script/Project capture) so the providers below stay
 // configuration-cache safe.
@@ -159,14 +161,14 @@ val engineProblemsOf: (List<Pair<String, File>>) -> List<String> = { dirs ->
         val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
         if (files.isEmpty()) {
             listOf(
-                "No PRoot engine payload in app/src/main/resources/lib/$abi/ — " +
+                "No PRoot engine payload in app/src/main/jniLibs/$abi/ — " +
                     "run ./scripts/fetch-engine.sh $abi"
             )
         } else {
             files.map { it.name }
                 .filterNot { it.startsWith("lib") && it.endsWith(".so") }
                 .map {
-                    "app/src/main/resources/lib/$abi/$it is not named lib*.so, so Android " +
+                    "app/src/main/jniLibs/$abi/$it is not named lib*.so, so Android " +
                         "will not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
                 }
         }
@@ -184,11 +186,11 @@ val engineProblemsOf: (List<Pair<String, File>>) -> List<String> = { dirs ->
  */
 val fetchEnginePayload by tasks.registering(Exec::class) {
     group = "build setup"
-    description = "Downloads the PRoot engine payload into src/main/resources/lib/<abi>/."
+    description = "Downloads the PRoot engine payload into src/main/jniLibs/<abi>/."
 
     val abi = engineAbis.first()
     val script = rootProject.file("scripts/fetch-engine.sh")
-    val payloadDir = file("src/main/resources/lib/$abi")
+    val payloadDir = file("src/main/jniLibs/$abi")
 
     // Skip entirely once a correctly named payload exists, so rebuilds need no network.
     // Deliberately `onlyIf` rather than `outputs.dir(payloadDir)`: the payload lives in
@@ -274,7 +276,7 @@ tasks.matching { it.name == "assembleDebug" }
  * Verifies the *built APK*, not the source tree.
  *
  * The source-tree checks above can pass while the APK still ends up without a usable
- * engine (a packaging rule drops `resources/lib/`, a file gets renamed, the fetch runs
+ * engine (a packaging rule drops the payload, a file gets renamed, the fetch runs
  * after packaging). `scripts/verify-apk-engine.sh` opens the real archive and asserts
  * `lib/<abi>/` contains an entry Android will actually extract, emitting `::error::`
  * so the reason shows up in CI annotations.

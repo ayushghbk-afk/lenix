@@ -116,7 +116,7 @@ class NativeSetupTest {
         val status = EngineInstaller.ensureEngine(files, "arm64-v8a", payload)
 
         assertFalse(status.available)
-        assertTrue(status.reason!!.contains("resources/lib/arm64-v8a"))
+        assertTrue(status.reason!!.contains("jniLibs/arm64-v8a"))
     }
 
     @Test
@@ -130,7 +130,7 @@ class NativeSetupTest {
 
         val onDevice = EngineInstaller.ensureEngine(files, "arm64-v8a", null, isAndroid = true)
         assertFalse(onDevice.available)
-        assertTrue(onDevice.reason!!.contains("resources/lib/arm64-v8a"))
+        assertTrue(onDevice.reason!!.contains("jniLibs/arm64-v8a"))
 
         val onJvm = EngineInstaller.ensureEngine(files, "arm64-v8a", null, isAndroid = false)
         assertTrue(onJvm.available)

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Fetch the real PRoot engine binaries for the signed APK payload.
 #
-# The engine must live in app/src/main/resources/lib/<abi>/ so it lands in the APK's
-# lib/<abi>/ and Android's package manager extracts it to /data/app/<pkg>/lib/<abi>/
-# (ApplicationInfo.nativeLibraryDir) — the only app-reachable location where SELinux
-# allows execve() on Android 10+ (W^X policy, see docs/DECISIONS.md ADR-021).
+# The engine must land in the APK's lib/<abi>/ so Android's package manager extracts it
+# to /data/app/<pkg>/lib/<abi>/ (ApplicationInfo.nativeLibraryDir) — the only
+# app-reachable location where SELinux allows execve() on Android 10+ (W^X policy, see
+# docs/DECISIONS.md ADR-021). A copy under assets/ -> filesDir/native/ FAILS with
+# "error=13, Permission denied".
 #
-# Why resources/lib and not jniLibs: Android Studio/AGP only packages `*.so` files
-# from jniLibs directories, while src/main/resources/lib/<abi>/ is the documented
-# (wrap.sh) route for packaging arbitrary executables under APK lib/<abi>/.
-# A copy under assets/ -> filesDir/native/ FAILS with "error=13, Permission denied".
+# The payload goes in app/src/main/jniLibs/<abi>/. The old wrap.sh-style route
+# (src/main/resources/lib/<abi>/) is no longer packaged into lib/<abi>/ by AGP, which
+# produced an APK whose lib/arm64-v8a/ held only dependency .so files and no engine.
+# jniLibs is the supported path and packages every *.so it finds — which is exactly
+# what the payload is named now.
 #
 # EVERY staged file is named lib*.so, executables included. Packaging a file into
 # lib/<abi>/ is not enough to get it onto the device: for a non-debuggable package the
@@ -30,7 +32,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ABI="${1:-arm64-v8a}"
 DEB_ARCH="${DEB_ARCH:-aarch64}"
-TARGET_DIR="$ROOT/app/src/main/resources/lib/$ABI"
+TARGET_DIR="$ROOT/app/src/main/jniLibs/$ABI"
 PROOT_VERSION="${PROOT_VERSION:-5.1.107.92}"
 PROOT_DEB_URL="${PROOT_DEB_URL:-https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${PROOT_VERSION}_${DEB_ARCH}.deb}"
 # Optional pinning: set PROOT_DEB_SHA256 to the .deb's SHA-256 (from the Termux

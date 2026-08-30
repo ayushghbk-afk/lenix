@@ -11,15 +11,15 @@ Every native artifact PocketVM needs, grouped by **where it lives**:
 ## 1. Host-side binaries (in APK → `/data/app/<pkg>/lib/<abi>/` native payload)
 
 Engine binaries are **native library payloads**, not assets: they are dropped into
-`app/src/main/resources/lib/<abi>/` and the package manager extracts them to
+`app/src/main/jniLibs/<abi>/` and the package manager extracts them to
 `ApplicationInfo.nativeLibraryDir` (`/data/app/<pkg>/lib/<abi>/`, SELinux
 `apk_data_file`). That is the *only* app-reachable location where `execve()` is still
 allowed on Android 10+ — `execve` of `filesDir` content is denied by the W^X policy
 (`app_data_file` + no `execute_no_trans`), which is the `error=13, Permission denied`
 seen when the engine was copied to `filesDir/native/`. See ADR-021.
 
-Why `resources/lib/<abi>/` and not `jniLibs/<abi>/`: Android Studio/AGP only packages
-`*.so` files from `jniLibs`, but `src/main/resources/lib/<abi>/` is the documented
+Why `jniLibs/<abi>/` and not `jniLibs/<abi>/`: Android Studio/AGP only packages
+`*.so` files from `jniLibs`, but `src/main/jniLibs/<abi>/` is the documented
 route for packaging arbitrary executables under the APK's `lib/<abi>/` (the same
 mechanism `wrap.sh` uses; NDK wrap-script guide, "Package wrap.sh").
 

@@ -363,8 +363,8 @@ guest ELFs) stays allowed there.
 
 **Decision:** Engine binaries ship as **native library payloads** — drop
 `proot` (+ static `loader`, `tini`, `libtalloc.so.2`, `libandroid-shmem.so`) into
-`app/src/main/resources/lib/<abi>/` (not `jniLibs/`: AGP only packages `*.so` from there;
-`resources/lib/<abi>/` is the documented wrap.sh route into the APK's `lib/<abi>/`).
+`app/src/main/jniLibs/<abi>/` (not `jniLibs/`: AGP only packages `*.so` from there;
+`jniLibs/<abi>/` is the documented wrap.sh route into the APK's `lib/<abi>/`).
 With `useLegacyPackaging = true` / `extractNativeLibs=true` the package manager
 extracts the whole `lib/<abi>/` to `/data/app/<pkg>/lib/<abi>/`
 (`ApplicationInfo.nativeLibraryDir`), which is labelled `apk_data_file`; app.te keeps
@@ -389,7 +389,7 @@ artifacts). The app:
   that must run from app data (the Termux termux-exec mechanism);
 - refuses to auto-download "engines": the old `DEFAULT_ENGINE_URLS` were 404s and an
   unsigned binary download is a supply-chain risk. `scripts/fetch-engine.sh` now
-  unpacks the real Termux PRoot `.deb` into `resources/lib/<abi>/` at build time and
+  unpacks the real Termux PRoot `.deb` into `jniLibs/<abi>/` at build time and
   validates the ELF machine;
 
 **Consequences:** The bundled `assets/native/arm64-v8a/proot` (a 770-byte shell
@@ -403,7 +403,7 @@ JVM-tested.
 
 ## ADR-022 — Engine payload files are named `lib*.so` and CI fetches them (accepted)
 
-**Context:** ADR-021 put the engine in `app/src/main/resources/lib/<abi>/`, but START
+**Context:** ADR-021 put the engine in `app/src/main/jniLibs/<abi>/`, but START
 still failed with `No PRoot engine for 'arm64-v8a' was found` and AUTOFIX ENGINE could
 never clear it. Two independent defects:
 

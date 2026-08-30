@@ -254,7 +254,7 @@ class HomeViewModel(
      *
      * Engines cannot be downloaded at runtime on Android 10+ (see ADR-021): the signed
      * APK payload is the only exec-able location, so this surfaces *why* it is missing
-     * and what to drop into `app/src/main/resources/lib/<abi>/`.
+     * and what to drop into `app/src/main/jniLibs/<abi>/`.
      */
     fun autofixEngine() {
         val id = mutableHomeState.value.selectedInstance.id

@@ -2,7 +2,7 @@
 # Verify a built APK actually carries a usable PRoot engine.
 #
 # The source-tree checks in app/build.gradle.kts can pass while the APK still ends up
-# without an engine (a packaging rule drops resources/lib/, a file gets renamed, the
+# without an engine (a packaging rule drops the payload, a file gets renamed, the
 # fetch runs after packaging). This opens the real archive and asserts that
 # lib/<abi>/ holds an entry Android will actually extract — the property the whole
 # fix depends on (docs/DECISIONS.md ADR-022).
@@ -25,7 +25,7 @@ if [ "${#APKS[@]}" -eq 0 ]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC_PAYLOAD="$ROOT/app/src/main/resources/lib/$ABI"
+SRC_PAYLOAD="$ROOT/app/src/main/jniLibs/$ABI"
 staged="$(ls -A "$SRC_PAYLOAD" 2>/dev/null | tr '\n' ' ')"
 echo "Source payload ($SRC_PAYLOAD): ${staged:-(empty)}"
 
@@ -49,7 +49,7 @@ PY
   echo "  lib/$ABI/: ${listing:-(empty)}"
 
   if [ -z "$names" ]; then
-    echo "::error::$(basename "$apk") has no entries under lib/$ABI/ at all — resources/lib/$ABI/ never made it into the APK." >&2
+    echo "::error::$(basename "$apk") has no entries under lib/$ABI/ at all — jniLibs/$ABI/ never made it into the APK." >&2
     status=1
     continue
   fi

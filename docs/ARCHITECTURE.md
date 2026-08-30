@@ -28,7 +28,7 @@
 | No root | No chroot, no mount(2), no overlayfs, no loop devices → PRoot ptrace interception; kernels appear as files |
 | Android app sandbox | Everything lives under the app's private dir; network is shared with Android; no netns |
 | No `/proc` from host | PRoot emulates `/proc` partial views; guest `ps`/`/proc` works via proot's emulation |
-| Android 10+ W^X | SELinux denies `execve` of `app_data_file` (`execute_no_trans`); engine binaries must ship as APK native payloads (`resources/lib/<abi>/` → `/data/app/.../lib/<abi>/`, still `x_file_perms`) and PRoot's loader is pinned there — ADR-021 |
+| Android 10+ W^X | SELinux denies `execve` of `app_data_file` (`execute_no_trans`); engine binaries must ship as APK native payloads (`jniLibs/<abi>/` → `/data/app/.../lib/<abi>/`, still `x_file_perms`) and PRoot's loader is pinned there — ADR-021 |
 | SELinux | `ptrace` of own children is allowed in the app domain (same uid) — Termux proves this works; some OEMs are stricter (see Risks §15) |
 | Foreground limits | A running Linux instance keeps the app in a foreground service |
 | Play policy | User-installable Linux environments are generally allowed, but `specialUse` FGS + clear disclosure is required; sideloading is the primary channel for v1 |
@@ -229,9 +229,9 @@ the app's own data dir) is denied by SELinux — `neverallow { all_untrusted_app
 `chmod 0700` cannot rescue a `filesDir` copy; exactly `error=13, Permission denied`.
 
 ```
-app/src/main/resources/lib/<abi>/{libproot.so, libprootloader.so, libtini.so, libtalloc.so, libandroid-shmem.so}
+app/src/main/jniLibs/<abi>/{libproot.so, libprootloader.so, libtini.so, libtalloc.so, libandroid-shmem.so}
         │ packaged verbatim at APK lib/<abi>/ (AGP only zips *.so from jniLibs,
-        │ so the payload uses resources/lib/<abi>/ — the wrap.sh route)
+        │ so the payload uses jniLibs/<abi>/, packaged into lib/<abi>/)
         │ `extractNativeLibs=true` → PackageManager extracts at install
         ▼
 /data/app/<pkg>/lib/<abi>/…            SELinux `apk_data_file` (x_file_perms) — exec OK

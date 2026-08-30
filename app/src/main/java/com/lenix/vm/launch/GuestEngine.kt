@@ -76,7 +76,7 @@ class ProotGuestEngine : GuestEngine {
                 VmError.NATIVE_ENGINE_FAILED,
                 status.reason
                     ?: "PRoot engine for ${request.abi} is not ready. Add the complete engine " +
-                        "payload under app/src/main/resources/lib/${request.abi}/ and rebuild.",
+                        "payload under app/src/main/jniLibs/${request.abi}/ and rebuild.",
             )
         }
         val proot = status.proot
@@ -85,7 +85,7 @@ class ProotGuestEngine : GuestEngine {
                 VmError.NATIVE_ENGINE_FAILED,
                 status.reason
                     ?: "PRoot engine for ${request.abi} is not installed. Add the engine " +
-                        "payload under app/src/main/resources/lib/${request.abi}/ and rebuild.",
+                        "payload under app/src/main/jniLibs/${request.abi}/ and rebuild.",
             )
         }
         if (!request.rootfs.isDirectory) {
