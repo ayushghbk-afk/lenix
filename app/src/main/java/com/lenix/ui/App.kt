@@ -41,6 +41,7 @@ fun LenixApp() {
             HomeScreen(
                 state = homeUiState,
                 onInstall = homeViewModel::install,
+                onCancelInstall = homeViewModel::cancelInstall,
                 onStart = homeViewModel::start,
                 onStop = homeViewModel::stop,
                 onReset = homeViewModel::reset,
@@ -49,7 +50,11 @@ fun LenixApp() {
             )
         }
         composable(Routes.SETTINGS) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                settings = homeUiState.settings,
+                onUpdate = homeViewModel::updateSettings,
+                onBack = { navController.popBackStack() },
+            )
         }
         composable(Routes.INSTANCES) {
             InstanceScreen(

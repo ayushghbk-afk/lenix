@@ -77,6 +77,19 @@ is not worth the complexity). Killed during commit → the atomic rename guarant
 either a complete rootfs or nothing.
 
 **Cancel/delete:** user cancels → delete `.tmp`, `.part`, release reservation.
+Completed layers stay in the content-addressed cache — they are immutable and
+verified, so the next attempt reuses them.
+
+**Implementation status (Phase 3):** steps [1]–[3] and [6]–[7] are implemented in
+`installer.RootfsInstaller` + `data.download.ResumableDownloader` (ADR-015).
+Differences from the sketch above, all recorded in ADR-015: cache files are named
+`cache/layers/<sha256>.layer` (one canonical name per digest), ETags are persisted
+as `<sha256>.layer.etag` sidecars for `If-Range`-validated resume across process
+death, download progress checkpoints live in `instances/<id>/state.json`
+(`data.JsonInstallStateStore`), and steps [4]–[5] are a staging stub — verified
+layers are copied into `instances/<id>/rootfs/` until real streaming extraction
+(Phase 5) and the guest bootstrap (later phases) land. The v0.1 layer source is
+pinned in the bundled manifest (see §7).
 
 ---
 
@@ -208,6 +221,20 @@ rootfs.yml  (on push to dist/rootfs/builder, cron weekly, manual dispatch)
 Reproducibility goal: same builder commit ⇒ identical layer `sha256` for the same
 package versions (achieved with pinning + `SOURCE_DATE_EPOCH`; exact-identical is
 nice-to-have, verify-by-hash is mandatory either way).
+
+**Implementation status (v0.1):** no Lenix-built layer exists yet, so the bundled
+manifest pins a real Debian bookworm arm64 rootfs published on GitHub Releases by
+`termux/proot-distro`
+(`debian-bookworm-aarch64-pd-v4.7.0.tar.xz`, sha256
+`4baa3228…b8df8` — the same digest upstream pins in its own installer). The app
+re-verifies that digest over the bytes it downloads; the layer is fetched at
+runtime and never vendored into the APK (Debian's and proot-distro's own licenses
+govern the guest content — GPL components are executed/downloaded as separate
+artifacts, per `docs/NATIVE_BINARIES.md`). `uncompressedBytes` for this borrowed
+layer is a conservative estimate feeding the storage precheck only. The pipeline
+above (docker-export `debian:bookworm-slim` → xz → this repo's Releases →
+regenerated manifest) replaces the pinned upstream layer once workflow-file
+permissions allow committing the builder.
 
 ## 8. Offline / "Install from file" (Phase 4)
 

@@ -84,8 +84,13 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.1")
 
+    // Resumable RootFS downloads (HTTP Range resume, ETag/If-Range validation).
+    // ARCHITECTURE.md pins OkHttp for the downloader; see docs/DECISIONS.md ADR-015.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // Local unit tests
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
