@@ -1,5 +1,6 @@
 package com.lenix.vm.launch
 
+import com.lenix.nativebridge.EngineInstaller
 import com.lenix.nativebridge.NativeSetup
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
@@ -24,6 +25,11 @@ data class LaunchRequest(
     val geometry: String = ProotCommandBuilder.DEFAULT_GEOMETRY,
     val desktop: String = ProotCommandBuilder.DEFAULT_DESKTOP,
     val abi: String = NativeSetup.DEFAULT_ABI,
+    /**
+     * `ApplicationInfo.nativeLibraryDir` — the signed APK payload directory that
+     * Android 10+ actually allows `execve` from (ADR-021).
+     */
+    val nativeLibDir: File? = null,
 )
 
 interface GuestSession {
@@ -36,25 +42,42 @@ interface GuestSession {
 }
 
 interface GuestEngine {
-    fun isAvailable(filesDir: File, abi: String = NativeSetup.DEFAULT_ABI): Boolean
+    /**
+     * @param nativeLibDir signed APK payload dir (already ABI-specific), or null.
+     */
+    fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?): Boolean
     fun launch(request: LaunchRequest): GuestSession
 }
 
 /**
- * Real PRoot engine: copies/uses `filesDir/native/<abi>/proot` and execs it.
+ * Real PRoot engine.
+ *
+ * The engine is exec'd from the APK payload (`ApplicationInfo.nativeLibraryDir`):
+ * Android 10+'s SELinux W^X policy denies direct exec from `filesDir`, and a legacy
+ * `filesDir/native/<abi>/proot` install is rejected on-device (its static loader
+ * cannot be relayed through `/system/bin/linker64`). `PROOT_LOADER` is pinned to the
+ * payload's static loader so PRoot never extracts+execs one into app temp (also
+ * denied). [AndroidExecBridge] remains as a safety net for bionic host helpers that
+ * must run from app data.
  */
 class ProotGuestEngine : GuestEngine {
 
-    override fun isAvailable(filesDir: File, abi: String): Boolean =
-        NativeSetup.hasProot(filesDir, abi)
+    override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?): Boolean =
+        EngineInstaller.ensureEngine(filesDir, abi, nativeLibDir).available
 
     override fun launch(request: LaunchRequest): GuestSession {
-        val nativeDir = NativeSetup.nativeDir(request.filesDir, request.abi)
-        val proot = File(nativeDir, NativeSetup.PROOT)
-        if (!proot.isFile || !proot.canExecute()) {
+        val status = EngineInstaller.ensureEngine(
+            filesDir = request.filesDir,
+            abi = request.abi,
+            nativeLibDir = request.nativeLibDir,
+        )
+        val proot = status.proot
+        if (proot == null) {
             throw VmException(
                 VmError.NATIVE_ENGINE_FAILED,
-                "PRoot is not installed at ${proot.absolutePath}. Unpack the native pack for ${request.abi}.",
+                status.reason
+                    ?: "PRoot engine for ${request.abi} is not installed. Add the engine " +
+                        "payload under app/src/main/resources/lib/${request.abi}/ and rebuild.",
             )
         }
         if (!request.rootfs.isDirectory) {
@@ -65,7 +88,20 @@ class ProotGuestEngine : GuestEngine {
         }
         request.home.mkdirs()
         request.shared.mkdirs()
-        val tini = File(nativeDir, NativeSetup.TINI)
+
+        val payloadDir = request.nativeLibDir?.takeIf { it.isDirectory }
+        val legacyDir = NativeSetup.nativeDir(request.filesDir, request.abi)
+        // Dependencies (e.g. libtalloc) sit next to the engine binary.
+        val libDir = (payloadDir ?: legacyDir).takeIf { it.isDirectory }
+        val tini = File(
+            if (payloadDir != null && File(payloadDir, NativeSetup.TINI).isFile) {
+                payloadDir
+            } else {
+                legacyDir
+            },
+            NativeSetup.TINI,
+        )
+
         val argv = when (request.mode) {
             GuestMode.SHELL -> ProotCommandBuilder.shell(
                 proot = proot,
@@ -86,10 +122,19 @@ class ProotGuestEngine : GuestEngine {
                 tini = tini.takeIf { it.isFile },
             )
         }
-        val process = ProcessBuilder(argv)
+        val command = AndroidExecBridge.resolve(argv, request.abi)
+        val tmpDir = File(request.filesDir, "proot-tmp").apply { mkdirs() }
+
+        val builder = ProcessBuilder(command)
             .directory(request.rootfs)
             .redirectErrorStream(true)
-            .start()
+        ProotCommandBuilder.applyEngineEnvironment(
+            environment = builder.environment(),
+            loader = status.loader,
+            tmpDir = tmpDir,
+            libDir = libDir,
+        )
+        val process = builder.start()
         return ProcessGuestSession(
             process = process,
             vncPort = request.vncPort,

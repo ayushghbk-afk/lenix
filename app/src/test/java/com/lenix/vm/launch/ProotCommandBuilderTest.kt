@@ -67,4 +67,38 @@ class ProotCommandBuilderTest {
         assertEquals("lxqt-session", ProotCommandBuilder.desktopSession("lxqt"))
         assertEquals("xfce4-session", ProotCommandBuilder.desktopSession("xfce"))
     }
+
+    @Test
+    fun `engine environment pins loader and keeps tmp and library paths in app data`() {
+        val loader = tmp.newFile("loader")
+        val tmpDir = tmp.newFolder("proot-tmp")
+        val libDir = tmp.newFolder("lib")
+
+        val env = mutableMapOf<String, String>("EXISTING" to "1")
+        ProotCommandBuilder.applyEngineEnvironment(env, loader, tmpDir, libDir)
+
+        assertEquals(loader.absolutePath, env[com.lenix.nativebridge.NativeSetup.ENV_PROOT_LOADER])
+        assertEquals(
+            tmpDir.absolutePath,
+            env[com.lenix.nativebridge.NativeSetup.ENV_PROOT_TMP_DIR],
+        )
+        assertEquals(
+            libDir.absolutePath,
+            env[com.lenix.nativebridge.NativeSetup.ENV_LD_LIBRARY_PATH],
+        )
+        assertEquals("1", env["EXISTING"])
+    }
+
+    @Test
+    fun `engine environment appends to an existing library path`() {
+        val libDir = tmp.newFolder("lib2")
+        val env = mutableMapOf<String, String>(
+            com.lenix.nativebridge.NativeSetup.ENV_LD_LIBRARY_PATH to "/old",
+        )
+        ProotCommandBuilder.applyEngineEnvironment(env, null, null, libDir)
+        assertEquals(
+            "${libDir.absolutePath}:/old",
+            env[com.lenix.nativebridge.NativeSetup.ENV_LD_LIBRARY_PATH],
+        )
+    }
 }

@@ -28,7 +28,7 @@
 | No root | No chroot, no mount(2), no overlayfs, no loop devices → PRoot ptrace interception; kernels appear as files |
 | Android app sandbox | Everything lives under the app's private dir; network is shared with Android; no netns |
 | No `/proc` from host | PRoot emulates `/proc` partial views; guest `ps`/`/proc` works via proot's emulation |
-| Android 10+ W^X | Standalone binaries in APK assets cannot be executed in place → copied to `filesDir/native/<abi>/` + chmod on first run |
+| Android 10+ W^X | SELinux denies `execve` of `app_data_file` (`execute_no_trans`); engine binaries must ship as APK native payloads (`resources/lib/<abi>/` → `/data/app/.../lib/<abi>/`, still `x_file_perms`) and PRoot's loader is pinned there — ADR-021 |
 | SELinux | `ptrace` of own children is allowed in the app domain (same uid) — Termux proves this works; some OEMs are stricter (see Risks §15) |
 | Foreground limits | A running Linux instance keeps the app in a foreground service |
 | Play policy | User-installable Linux environments are generally allowed, but `specialUse` FGS + clear disclosure is required; sideloading is the primary channel for v1 |
@@ -126,7 +126,7 @@ lenix/
 │       │   ├── nativebridge/               # JNI surface (thin, safe)
 │       │   │   ├── Extractor.kt
 │       │   │   ├── Pty.kt
-│       │   │   ├── NativeSetup.kt          # asset → filesDir copy + chmod
+│       │   │   ├── NativeSetup.kt          # ELF probe + engine validation
 │       │   │   └── NativeLibs.kt
 │       │   ├── data/
 │       │   │   ├── distro/                 # catalog repository, update channel
@@ -220,23 +220,39 @@ keeps Phase 1 velocity; package boundaries enforce the same seams.
 - **RFB:** one reader thread (socket → framebuffer), one renderer (SurfaceView),
   input on the UI thread posting to the VNC socket.
 
-### 5.3 Native bootstrap on first launch
+### 5.3 Native engine bootstrap
 
-Android 10+ forbids executing binaries directly from APK assets:
+The engine binaries ship as **native library payloads**, never as assets copied to
+`filesDir` (ADR-021). On Android 10+, `execve()` of an `app_data_file` (anything under
+the app's own data dir) is denied by SELinux — `neverallow { all_untrusted_apps }
+{ app_data_file privapp_data_file }:file execute_no_trans` (AOSP `0dd738d8`) — so
+`chmod 0700` cannot rescue a `filesDir` copy; exactly `error=13, Permission denied`.
 
 ```
-assets/native/<abi>/{pvmextract,ttini,proot,busybox,...}
-        │ copy (not zip-install)
+app/src/main/resources/lib/<abi>/{proot, loader, tini, libtalloc.so.2, libandroid-shmem.so}
+        │ packaged verbatim at APK lib/<abi>/ (AGP only zips *.so from jniLibs,
+        │ so the payload uses resources/lib/<abi>/ — the wrap.sh route)
+        │ `extractNativeLibs=true` → PackageManager extracts at install
         ▼
-filesDir/native/<abi>/…            chmod 0700, chmod 0600 configs
-        │ verify sha256 (embedded in BuildConfig)
+/data/app/<pkg>/lib/<abi>/…            SELinux `apk_data_file` (x_file_perms) — exec OK
+        │ EngineInstaller.ensureEngine() validates ELF e_machine + PT_INTERP
         ▼
-NativeSetup.ready = true           NativeLibs.load("pvmnative")
+ProcessBuilder proot -r rootfs -0 …     PROOT_LOADER=<payload>/loader
+                                        PROOT_TMP_DIR=filesDir/proot-tmp (scratch only)
+                                        LD_LIBRARY_PATH=<payload> (bionic .so deps)
 ```
 
-`NativeLibs.load` is **not** required for running the guest — the engine binaries are
-executed via `ProcessBuilder`, never linked (`dlopen`) into the app, which is what keeps
-GPL components out of the APK's linkage graph (§16.2).
+Why this works: `appdomain` keeps `allow apk_data_file:file { … x_file_perms }`
+(`x_file_perms` includes `execute_no_trans`), and `mmap(PROT_EXEC)` of `app_data_file`
+stays allowed — that is precisely how PRoot's static loader maps guest ELFs, so the
+kernel never `execve`s a guest binary from `filesDir`. A legacy `filesDir/native/<abi>`
+engine is therefore **rejected on Android 10+** (even the `system_linker_exec` relay in
+`AndroidExecBridge` can't rescue the static loader it must exec) and remains a
+JVM/desktop fallback only.
+
+`NativeBridge` (JNI) is **not** required for running the guest — the engine binaries
+are executed via `ProcessBuilder`, never linked (`dlopen`) into the app, which is what
+keeps GPL components out of the APK's linkage graph (§16.2).
 
 ## 6. Native engine (see `NATIVE_BINARIES.md` for the full table)
 
@@ -271,7 +287,7 @@ object Launcher {
 
 ```
 <app filesDir>/                                        # /data/user/0/com.pocketvm/files
-├── native/<abi>/…                                     # engine binaries (bootstrap)
+├── native/<abi>/…                                     # legacy JVM/dev engine copies (rejected on Android 10+)
 ├── shared/                                            # host↔guest file exchange
 │   └── …                                              # bind-mounted into guest at /shared
 ├── cache/

@@ -316,8 +316,10 @@ private fun VmCard(
                                 "This RootFS layer is compressed in a format the app cannot " +
                                     "read yet — zstd needs libpvmnative. xz and gz layers work today."
                             VmError.NATIVE_ENGINE_FAILED ->
-                                "PRoot is not installed on this device. Tap AUTOFIX ENGINE " +
-                                    "to automatically install or preinstall the arm64-v8a PRoot engine."
+                                "The PRoot engine payload is missing from this build. Run " +
+                                    "scripts/fetch-engine.sh, add the engine to " +
+                                    "app/src/main/resources/lib/arm64-v8a/, rebuild, then tap " +
+                                    "AUTOFIX ENGINE to re-check."
                             VmError.VNC_CONNECTION_FAILED ->
                                 "The built-in viewer could not reach Xvnc on loopback."
                             VmError.CHECKSUM_FAILED ->

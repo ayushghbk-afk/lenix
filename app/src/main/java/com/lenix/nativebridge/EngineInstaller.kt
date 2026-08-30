@@ -1,102 +1,130 @@
 package com.lenix.nativebridge
 
+import com.lenix.vm.launch.AndroidExecBridge
 import java.io.File
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
- * Handles automatic preinstallation and autofixing of native engine binaries (PRoot).
+ * Locates and validates the host-side PRoot engine (H1 in docs/NATIVE_BINARIES.md).
+ *
+ * Since Android 10 the engine must be **executed from the APK's native payload
+ * directory** (`app/src/main/resources/lib/<abi>/` → `ApplicationInfo.nativeLibraryDir`,
+ * SELinux `apk_data_file`), never from `filesDir/` (ADR-021). This class therefore
+ * validates the payload that the package manager extracted, not an asset copy.
  */
 object EngineInstaller {
 
-    val DEFAULT_ENGINE_URLS = listOf(
-        "https://raw.githubusercontent.com/termux/proot-distro/master/proot",
-        "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot",
-    )
+    enum class Source {
+        /** Engine from the signed APK payload under `/data/app/.../lib/<abi>`. */
+        APK_PAYLOAD,
 
-    /**
-     * Ensures that the PRoot engine is installed under `filesDir/native/<abi>/proot`.
-     * If missing, unpacks from assets or downloads from [engineUrls].
-     */
-    fun ensureOrInstallEngine(
-        filesDir: File,
-        abi: String = NativeSetup.DEFAULT_ABI,
-        openAsset: (String) -> InputStream?,
-        engineUrls: List<String> = DEFAULT_ENGINE_URLS,
-        downloader: ((String, File) -> Boolean)? = null,
-    ): Boolean {
-        val destDir = NativeSetup.nativeDir(filesDir, abi)
-        destDir.mkdirs()
+        /** Legacy `filesDir/native/<abi>` — debug only; direct exec is denied on Android 10+. */
+        LEGACY_FILES_DIR,
 
-        // 1. Try unpacking preinstalled assets
-        NativeSetup.installFromAssets(
-            destDir = destDir,
-            abi = abi,
-            openAsset = openAsset,
-        )
-
-        if (NativeSetup.hasProot(filesDir, abi)) {
-            val prootFile = File(destDir, NativeSetup.PROOT)
-            prootFile.setExecutable(true, true)
-            prootFile.setReadable(true, true)
-            prootFile.setWritable(true, true)
-            return true
-        }
-
-        // 2. Try downloading engine binary
-        val prootFile = File(destDir, NativeSetup.PROOT)
-        if (downloader != null) {
-            for (url in engineUrls) {
-                if (downloader(url, prootFile) && prootFile.isFile && prootFile.length() > 0) {
-                    prootFile.setExecutable(true, true)
-                    prootFile.setReadable(true, true)
-                    prootFile.setWritable(true, true)
-                    return true
-                }
-            }
-        } else {
-            for (urlStr in engineUrls) {
-                if (downloadFile(urlStr, prootFile)) {
-                    prootFile.setExecutable(true, true)
-                    prootFile.setReadable(true, true)
-                    prootFile.setWritable(true, true)
-                    return true
-                }
-            }
-        }
-
-        return NativeSetup.hasProot(filesDir, abi)
+        NONE,
     }
 
-    private fun downloadFile(urlStr: String, destFile: File): Boolean {
-        return try {
-            val url = URL(urlStr)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 15_000
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = true
-            if (connection.responseCode in 200..299) {
-                val tmp = File(destFile.parentFile, "${destFile.name}.tmp")
-                connection.inputStream.use { input ->
-                    tmp.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                if (tmp.isFile && tmp.length() > 0) {
-                    if (destFile.exists()) destFile.delete()
-                    val success = tmp.renameTo(destFile)
-                    if (!success) {
-                        tmp.copyTo(destFile, overwrite = true)
-                        tmp.delete()
-                    }
-                    return true
-                }
+    data class EngineStatus(
+        val available: Boolean,
+        /** The PRoot binary to execute (may be under app data in legacy mode). */
+        val proot: File?,
+        /** PRoot's static runtime loader, or null when it is not shipped (guest execs will fail). */
+        val loader: File?,
+        val source: Source,
+        /** Human-readable explanation when [available] is false or [source] is legacy. */
+        val reason: String? = null,
+    )
+
+    private val NOT_AVAILABLE = EngineStatus(false, null, null, Source.NONE)
+
+    /**
+     * Resolves the engine with a hard preference for the signed APK payload.
+     *
+     * @param nativeLibDir `ApplicationInfo.nativeLibraryDir` (already ABI-specific), or null
+     *   outside Android / in tests.
+     */
+    fun ensureEngine(
+        filesDir: File,
+        abi: String = NativeSetup.DEFAULT_ABI,
+        nativeLibDir: File? = null,
+        isAndroid: Boolean = AndroidExecBridge.isAndroidRuntime(),
+    ): EngineStatus {
+        // 1. Signed APK payload (the only location Android 10+ allows exec from).
+        if (nativeLibDir != null && nativeLibDir.isDirectory) {
+            val proot = File(nativeLibDir, NativeSetup.PROOT)
+            if (NativeSetup.isMachineCompatibleElf(proot, abi)) {
+                val loader = File(nativeLibDir, NativeSetup.PROOT_LOADER)
+                val loaderValid = NativeSetup.isMachineCompatibleElf(loader, abi)
+                return EngineStatus(
+                    available = true,
+                    proot = proot,
+                    loader = loader.takeIf { loaderValid },
+                    source = Source.APK_PAYLOAD,
+                    reason = if (loaderValid) {
+                        null
+                    } else {
+                        "PRoot '$abi' payload is present but its static loader is missing or " +
+                            "corrupt — guest binaries cannot start. Ship `loader` next to `proot` " +
+                            "in app/src/main/resources/lib/$abi/."
+                    },
+                )
             }
-            false
-        } catch (_: Exception) {
-            false
+            val payloadProot = File(nativeLibDir, NativeSetup.PROOT)
+            if (payloadProot.exists() && !NativeSetup.isElf(payloadProot)) {
+                return EngineStatus(
+                    available = false,
+                    proot = null,
+                    loader = null,
+                    source = Source.NONE,
+                    reason = "The bundled '$abi' proot payload is not an ELF executable " +
+                        "(${payloadProot.absolutePath}). Drop the real PRoot binary into " +
+                        "app/src/main/resources/lib/$abi/ and rebuild.",
+                )
+            }
+            if (payloadProot.exists()) {
+                val want = NativeSetup.machineFor(abi)
+                val got = NativeSetup.probe(payloadProot).machine
+                return EngineStatus(
+                    available = false,
+                    proot = null,
+                    loader = null,
+                    source = Source.NONE,
+                    reason = "The bundled proot payload is for a different architecture " +
+                        "(e_machine 0x${got.toString(16)}, expected $abi " +
+                        "0x${want.toString(16)} at ${payloadProot.absolutePath}). Ship " +
+                        "the ${abi} build in app/src/main/resources/lib/$abi/.",
+                )
+            }
         }
+
+        // 2. Legacy user-placed filesDir copy. On Android 10+ this cannot work at all:
+        //    SELinux denies direct exec of app-data files, and PRoot's static `loader`
+        //    (exec'd for every guest binary) has no `/system/bin/linker64` relay — only
+        //    the signed APK payload is exec-able. Keep it as the JVM/desktop fallback.
+        val legacyDir = NativeSetup.nativeDir(filesDir, abi)
+        val legacyProot = File(legacyDir, NativeSetup.PROOT)
+        if (NativeSetup.isMachineCompatibleElf(legacyProot, abi)) {
+            if (isAndroid) {
+                return NOT_AVAILABLE.copy(
+                    reason = "A $abi engine exists at ${legacyProot.absolutePath}, but " +
+                        "Android 10+ denies execve from app data and PRoot's static loader " +
+                        "cannot be relayed through /system/bin/linker64. Ship the engine " +
+                        "payload (proot + loader + .so deps) in app/src/main/resources/lib/$abi/ " +
+                        "and rebuild (ADR-021).",
+                )
+            }
+            val loader = File(legacyDir, NativeSetup.PROOT_LOADER)
+            return EngineStatus(
+                available = true,
+                proot = legacyProot,
+                loader = loader.takeIf { NativeSetup.isMachineCompatibleElf(loader, abi) },
+                source = Source.LEGACY_FILES_DIR,
+            )
+        }
+
+        return NOT_AVAILABLE.copy(
+            reason = "No PRoot engine for '$abi' was found. Add the engine payload " +
+                "(proot, loader and PRoot's .so dependencies) under " +
+                "app/src/main/resources/lib/$abi/ — run scripts/fetch-engine.sh — and rebuild.",
+        )
     }
 }

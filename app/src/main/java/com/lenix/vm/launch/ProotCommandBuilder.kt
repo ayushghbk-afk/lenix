@@ -1,5 +1,6 @@
 package com.lenix.vm.launch
 
+import com.lenix.nativebridge.NativeSetup
 import java.io.File
 
 /**
@@ -71,6 +72,36 @@ object ProotCommandBuilder {
         "lxqt" -> "lxqt-session"
         "xfce", "xfce4" -> "xfce4-session"
         else -> "openbox-session"
+    }
+
+    /**
+     * Environment for the PRoot host process (ADR-021).
+     *
+     * - `PROOT_LOADER`: pin PRoot's static loader to the APK payload so it never extracts
+     *   + execs one from app temp (denied by SELinux on Android 10+).
+     * - `PROOT_TMP_DIR`/`TMPDIR`: PRoot's scratch space (never exec'd — safe in filesDir).
+     * - `LD_LIBRARY_PATH`: PRoot is a bionic binary; its `.so` deps (libtalloc, etc.)
+     *   ship beside the engine binary in the payload dir.
+     */
+    fun applyEngineEnvironment(
+        environment: MutableMap<String, String>,
+        loader: File?,
+        tmpDir: File?,
+        libDir: File?,
+    ) {
+        if (loader != null && loader.isFile) {
+            environment[NativeSetup.ENV_PROOT_LOADER] = loader.absolutePath
+        }
+        if (tmpDir != null) {
+            environment[NativeSetup.ENV_PROOT_TMP_DIR] = tmpDir.absolutePath
+            environment[NativeSetup.ENV_TMPDIR] = tmpDir.absolutePath
+        }
+        if (libDir != null) {
+            val existing = environment[NativeSetup.ENV_LD_LIBRARY_PATH]
+            environment[NativeSetup.ENV_LD_LIBRARY_PATH] =
+                if (existing.isNullOrBlank()) libDir.absolutePath
+                else "${libDir.absolutePath}:$existing"
+        }
     }
 
     private fun base(

@@ -350,6 +350,55 @@ START. Tight/JPEG is a later encoding behind the same client.
 **Consequences:** The protocol is JVM-tested with a scripted server. A Debian layer
 without Xvnc/Openbox will retry then surface `VNC_CONNECTION_FAILED` instead of hanging.
 
+## ADR-021 — Engine exec: signed APK native payload, not filesDir (accepted)
+
+**Context:** On-device START failed with `Cannot run program
+"/data/user/0/com.lenix/files/native/arm64-v8a/proot": error=13, Permission denied`.
+ADR-019 said "copy assets to filesDir + chmod 0700", but that is not what Android 10+'s
+W^X restriction is: since AOSP commit `0dd738d8` (Android 10, targetSdk ≥ 29),
+SELinux *neverallows* `{ all_untrusted_apps } { app_data_file privapp_data_file }:file
+execute_no_trans`. `execve()` of a 0700 file under `/data/user/0/<pkg>/` fails EACCES
+regardless of mode bits; only `mmap(PROT_EXEC)` (dlopen, and PRoot's own loader mapping
+guest ELFs) stays allowed there.
+
+**Decision:** Engine binaries ship as **native library payloads** — drop
+`proot` (+ static `loader`, `tini`, `libtalloc.so.2`, `libandroid-shmem.so`) into
+`app/src/main/resources/lib/<abi>/` (not `jniLibs/`: AGP only packages `*.so` from there;
+`resources/lib/<abi>/` is the documented wrap.sh route into the APK's `lib/<abi>/`).
+With `useLegacyPackaging = true` / `extractNativeLibs=true` the package manager
+extracts the whole `lib/<abi>/` to `/data/app/<pkg>/lib/<abi>/`
+(`ApplicationInfo.nativeLibraryDir`), which is labelled `apk_data_file`; app.te keeps
+`allow appdomain apk_data_file:file { ... x_file_perms }` there, so direct exec is
+legal (Google's own response on this says exactly this: package the binaries in the
+app's native libs directory, enable `extractNativeLibs`, exec the `/data/app`
+artifacts). The app:
+
+- resolves the engine at `ApplicationInfo.nativeLibraryDir` via
+  `EngineInstaller.ensureEngine()`, validating `e_machine`/`PT_INTERP` with
+  `NativeSetup.probe()` instead of trusting a filename;
+- pins `PROOT_LOADER` to the payload's static loader (PRoot must never extract+exec a
+  loader into app temp — that exec is denied too) and leaves `PROOT_TMP_DIR` in
+  `filesDir` (scratch only, never exec'd);
+- sets `LD_LIBRARY_PATH` to the payload dir for PRoot's bionic `.so` deps;
+- for a legacy `filesDir/native/<abi>` install **fails fast on Android 10+** with an
+  actionable message instead of half-working: even a bionic engine would run, but the
+  static `loader` it execs for every guest binary can't be relayed through
+  `/system/bin/linker64` (`system_linker_exec` has no `execute_no_trans` for app data
+  either). Off-Android (JVM/dev setups) the filesDir engine still works directly.
+  `AndroidExecBridge` keeps the linker relay as a safety net for bionic host helpers
+  that must run from app data (the Termux termux-exec mechanism);
+- refuses to auto-download "engines": the old `DEFAULT_ENGINE_URLS` were 404s and an
+  unsigned binary download is a supply-chain risk. `scripts/fetch-engine.sh` now
+  unpacks the real Termux PRoot `.deb` into `resources/lib/<abi>/` at build time and
+  validates the ELF machine;
+
+**Consequences:** The bundled `assets/native/arm64-v8a/proot` (a 770-byte shell
+launcher, not PRoot) is gone; a build without the payload fails explicitly
+(`NATIVE_ENGINE_FAILED` with an actionable message) instead of pretending the engine
+exists. APK size grows by the payload (~0.5 MB + deps). Unit tests cover ELF probing,
+payload-vs-legacy resolution and the linker relay; the real binary still cannot be
+JVM-tested.
+
 ---
 
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

@@ -99,10 +99,15 @@ class HomeViewModel(
     private val guestRuntime: GuestRuntime = GuestRuntime(
         filesDir = application.filesDir,
         manager = vmManager,
+        nativeLibDir = File(application.applicationInfo.nativeLibraryDir),
+        abi = runtimeAbi(application),
     ),
 ) : AndroidViewModel(application) {
 
     private val vmDispatcher = Dispatchers.IO.limitedParallelism(1)
+
+    /** The ABI the engine payload must match (mirrors [runtimeAbi]). */
+    private val engineAbi: String = runtimeAbi(getApplication<Application>())
 
     private var selectedId: String =
         selectionStore.load()?.let { saved -> vmManager.getInstance(saved)?.id }
@@ -245,18 +250,22 @@ class HomeViewModel(
     }
 
     /**
-     * Preinstalls / autofixes the PRoot engine if missing, clearing NATIVE_ENGINE_FAILED.
+     * Re-validates / autofixes the PRoot engine if missing, clearing NATIVE_ENGINE_FAILED.
+     *
+     * Engines cannot be downloaded at runtime on Android 10+ (see ADR-021): the signed
+     * APK payload is the only exec-able location, so this surfaces *why* it is missing
+     * and what to drop into `app/src/main/resources/lib/<abi>/`.
      */
     fun autofixEngine() {
         val id = mutableHomeState.value.selectedInstance.id
         viewModelScope.launch(vmDispatcher) {
             mutableHomeState.update { current ->
                 current.copy(
-                    message = "Installing PRoot engine…",
+                    message = "Checking PRoot engine…",
                     installProgress = HomeUiState.InstallProgress(
                         state = VmState.INSTALLING,
                         fraction = 0.5f,
-                        message = "Preinstalling arm64-v8a PRoot engine…",
+                        message = "Validating the $engineAbi PRoot engine payload…",
                     ),
                 )
             }
@@ -275,41 +284,36 @@ class HomeViewModel(
                     current.copy(
                         isEngineAvailable = true,
                         installProgress = HomeUiState.InstallProgress.Inactive,
-                        message = "PRoot engine installed successfully! Ready to START.",
+                        message = "PRoot engine detected! Ready to START.",
                     )
                 }
             } else {
                 vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
+                val status = EngineInstaller.ensureEngine(
+                    filesDir = getApplication<Application>().filesDir,
+                    abi = runtimeAbi(getApplication<Application>()),
+                    nativeLibDir = enginePayloadDir(),
+                )
                 mutableHomeState.update { current ->
                     current.copy(
                         isEngineAvailable = false,
                         installProgress = HomeUiState.InstallProgress.Inactive,
-                        message = "Could not install PRoot engine automatically. Place proot under filesDir/native/.",
+                        message = status.reason ?: "PRoot engine for $engineAbi is missing.",
                     )
                 }
             }
         }
     }
 
-    private fun autoInstallEngineInternal(): Boolean {
-        val app = getApplication<Application>()
-        val abi = try {
-            android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
-        } catch (_: Throwable) {
-            NativeSetup.DEFAULT_ABI
-        }
-        return EngineInstaller.ensureOrInstallEngine(
-            filesDir = app.filesDir,
-            abi = abi,
-            openAsset = { path ->
-                try {
-                    app.assets.open(path)
-                } catch (_: Exception) {
-                    null
-                }
-            },
-        )
-    }
+    private fun autoInstallEngineInternal(): Boolean =
+        EngineInstaller.ensureEngine(
+            filesDir = getApplication<Application>().filesDir,
+            abi = runtimeAbi(getApplication<Application>()),
+            nativeLibDir = enginePayloadDir(),
+        ).available
+
+    private fun enginePayloadDir(): File =
+        File(getApplication<Application>().applicationInfo.nativeLibraryDir)
 
     fun start() {
         val id = mutableHomeState.value.selectedInstance.id
@@ -325,10 +329,16 @@ class HomeViewModel(
                     val fixed = autoInstallEngineInternal()
                     if (!fixed) {
                         vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
+                        val status = EngineInstaller.ensureEngine(
+                            filesDir = getApplication<Application>().filesDir,
+                            abi = runtimeAbi(getApplication<Application>()),
+                            nativeLibDir = enginePayloadDir(),
+                        )
                         mutableHomeState.update { current ->
                             current.copy(
                                 isEngineAvailable = false,
-                                message = "PRoot is not installed on this device. Tap AUTOFIX ENGINE to install it.",
+                                message = status.reason
+                                    ?: "PRoot engine for $engineAbi is missing. Tap AUTOFIX ENGINE for details.",
                             )
                         }
                         return@launch
@@ -674,6 +684,17 @@ private fun freeBytesOn(dir: File): Long = try {
     StatFs(dir.absolutePath).availableBytes
 } catch (e: Exception) {
     -1L
+}
+
+/**
+ * The ABI the engine payload must match. Android reports the *supported* ABI list in
+ * preference order; v0.1 ships arm64-v8a only, but honoring the device keeps the
+ * engine check honest on emulators/x86_64.
+ */
+private fun runtimeAbi(application: Application): String = try {
+    android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
+} catch (_: Throwable) {
+    NativeSetup.DEFAULT_ABI
 }
 
 /**
