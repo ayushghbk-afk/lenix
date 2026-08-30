@@ -256,6 +256,60 @@ tasks.matching { it.name == "assembleDebug" }
     .configureEach { dependsOn(warnEnginePayload) }
 
 /**
+ * Verifies the *built APK*, not the source tree.
+ *
+ * The source-tree checks above can pass while the APK still ends up without a usable
+ * engine (a packaging rule drops `resources/lib/`, someone renames a file, AGP changes
+ * behaviour). This opens the real archive and asserts `lib/<abi>/` contains an entry
+ * Android will actually extract — the property the whole fix depends on.
+ */
+val verifyApkEngine by tasks.registering {
+    group = "verification"
+    description = "Asserts the built APK carries an extractable engine under lib/<abi>/."
+
+    val abi = engineAbis.first()
+    val apkDir = layout.buildDirectory.dir("outputs/apk/debug")
+    val requiredEntry = "lib/$abi/libproot.so"
+
+    doLast {
+        val apks = apkDir.get().asFile.listFiles()?.filter { it.name.endsWith(".apk") }.orEmpty()
+        if (apks.isEmpty()) {
+            throw org.gradle.api.GradleException("No debug APK found in ${apkDir.get().asFile}.")
+        }
+        apks.forEach { apk ->
+            java.util.zip.ZipFile(apk).use { zip ->
+                val libEntries = zip.entries().toList()
+                    .map { it.name }
+                    .filter { it.startsWith("lib/$abi/") }
+                if (zip.getEntry(requiredEntry) == null) {
+                    throw org.gradle.api.GradleException(
+                        "${apk.name} has no $requiredEntry — the app would fail at START " +
+                            "with NATIVE_ENGINE_FAILED. Entries under lib/$abi/: " +
+                            (libEntries.ifEmpty { listOf("(none)") }).joinToString()
+                    )
+                }
+                val unextractable = libEntries
+                    .map { it.substringAfterLast('/') }
+                    .filter { it.isNotEmpty() }
+                    .filterNot { it.startsWith("lib") && it.endsWith(".so") }
+                if (unextractable.isNotEmpty()) {
+                    throw org.gradle.api.GradleException(
+                        "${apk.name} packages ${unextractable.joinToString()} under lib/$abi/, " +
+                            "which Android will not extract on a release build (ADR-022)."
+                    )
+                }
+                logger.lifecycle(
+                    "Engine payload verified in ${apk.name}: " +
+                        libEntries.map { it.substringAfterLast('/') }.sorted().joinToString()
+                )
+            }
+        }
+    }
+}
+
+tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(verifyApkEngine) }
+
+/**
  * CI reads the console, not the HTML report, so a failing test has to explain itself there:
  * full exception messages and stack traces (one summarized line is not a diagnosis), plus
  * anything a test prints on purpose.
