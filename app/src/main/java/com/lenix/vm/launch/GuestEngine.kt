@@ -63,7 +63,7 @@ interface GuestEngine {
 class ProotGuestEngine : GuestEngine {
 
     override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?): Boolean =
-        EngineInstaller.ensureEngine(filesDir, abi, nativeLibDir).available
+        EngineInstaller.ensureEngine(filesDir, abi, nativeLibDir).isReady
 
     override fun launch(request: LaunchRequest): GuestSession {
         val status = EngineInstaller.ensureEngine(
@@ -71,6 +71,14 @@ class ProotGuestEngine : GuestEngine {
             abi = request.abi,
             nativeLibDir = request.nativeLibDir,
         )
+        if (!status.isReady) {
+            throw VmException(
+                VmError.NATIVE_ENGINE_FAILED,
+                status.reason
+                    ?: "PRoot engine for ${request.abi} is not ready. Add the complete engine " +
+                        "payload under app/src/main/resources/lib/${request.abi}/ and rebuild.",
+            )
+        }
         val proot = status.proot
         if (proot == null) {
             throw VmException(

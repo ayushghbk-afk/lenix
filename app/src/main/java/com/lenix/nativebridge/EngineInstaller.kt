@@ -30,9 +30,21 @@ object EngineInstaller {
         /** PRoot's static runtime loader, or null when it is not shipped (guest execs will fail). */
         val loader: File?,
         val source: Source,
-        /** Human-readable explanation when [available] is false or [source] is legacy. */
+        /**
+         * Human-readable explanation when the engine is not usable. It is non-null when
+         * [available] is false, when [source] is legacy, or when a payload is present but
+         * has a runtime caveat (missing loader / bionic deps).
+         */
         val reason: String? = null,
-    )
+    ) {
+        /**
+         * True only when the engine can actually launch a guest. `available` alone is not
+         * enough: a payload may contain a valid `proot` while still failing at runtime
+         * (missing static loader or bionic `.so` deps), and [reason] records that caveat.
+         * Autofix / start must use this, not raw [available].
+         */
+        val isReady: Boolean get() = available && reason == null
+    }
 
     private val NOT_AVAILABLE = EngineStatus(false, null, null, Source.NONE)
 
@@ -54,16 +66,33 @@ object EngineInstaller {
             if (NativeSetup.isMachineCompatibleElf(proot, abi)) {
                 val loader = File(nativeLibDir, NativeSetup.PROOT_LOADER)
                 val loaderValid = NativeSetup.isMachineCompatibleElf(loader, abi)
+                val caveats = mutableListOf<String>().apply {
+                    // A bionic-linked PRoot needs its shared libraries next to it. Without
+                    // them the process cannot even start, so this must block `isReady`.
+                    if (NativeSetup.isBionicExecutable(proot, abi)) {
+                        val missing = NativeSetup.BIONIC_DEPS.filter { dep ->
+                            !File(nativeLibDir, dep).isFile
+                        }
+                        if (missing.isNotEmpty()) {
+                            add("its shared library " +
+                                (if (missing.size == 1) "dependency is" else "dependencies are") +
+                                " missing: ${missing.joinToString()}")
+                        }
+                    }
+                    if (!loaderValid) {
+                        add("its static loader is missing or corrupt")
+                    }
+                }
                 return EngineStatus(
                     available = true,
                     proot = proot,
                     loader = loader.takeIf { loaderValid },
                     source = Source.APK_PAYLOAD,
-                    reason = if (loaderValid) {
+                    reason = if (caveats.isEmpty()) {
                         null
                     } else {
-                        "PRoot '$abi' payload is present but its static loader is missing or " +
-                            "corrupt — guest binaries cannot start. Ship `loader` next to `proot` " +
+                        "PRoot '$abi' payload is present but ${caveats.joinToString("; ")} — " +
+                            "guest binaries cannot start. Ship the missing files next to `proot` " +
                             "in app/src/main/resources/lib/$abi/."
                     },
                 )

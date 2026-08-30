@@ -130,6 +130,38 @@ fun HomeScreen(
                     }
                 }
             } else {
+                if (!state.isEngineAvailable) {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                "PRoot engine unavailable",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Text(
+                                "The ${state.selectedInstance.architecture} engine payload is " +
+                                    "missing or invalid, so Linux cannot start. Tap AUTOFIX ENGINE " +
+                                    "to re-check the signed APK payload.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = onAutofixEngine,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Default.Build, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("AUTOFIX ENGINE")
+                            }
+                        }
+                    }
+                }
+
                 VmCard(
                     state = state,
                     instance = instance,

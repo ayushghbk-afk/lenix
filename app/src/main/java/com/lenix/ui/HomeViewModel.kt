@@ -99,7 +99,7 @@ class HomeViewModel(
     private val guestRuntime: GuestRuntime = GuestRuntime(
         filesDir = application.filesDir,
         manager = vmManager,
-        nativeLibDir = File(application.applicationInfo.nativeLibraryDir),
+        nativeLibDir = enginePayloadDir(application),
         abi = runtimeAbi(application),
     ),
 ) : AndroidViewModel(application) {
@@ -280,11 +280,16 @@ class HomeViewModel(
                         vmManager.reset(id)
                     }
                 }
+                val recovered = vmManager.getInstance(id)?.state == VmState.READY
                 mutableHomeState.update { current ->
                     current.copy(
                         isEngineAvailable = true,
                         installProgress = HomeUiState.InstallProgress.Inactive,
-                        message = "PRoot engine detected! Ready to START.",
+                        message = if (recovered) {
+                            "PRoot engine detected! Ready to START."
+                        } else {
+                            "PRoot engine detected. Install the RootFS to continue."
+                        },
                     )
                 }
             } else {
@@ -310,10 +315,9 @@ class HomeViewModel(
             filesDir = getApplication<Application>().filesDir,
             abi = runtimeAbi(getApplication<Application>()),
             nativeLibDir = enginePayloadDir(),
-        ).available
+        ).isReady
 
-    private fun enginePayloadDir(): File =
-        File(getApplication<Application>().applicationInfo.nativeLibraryDir)
+    private fun enginePayloadDir(): File? = enginePayloadDir(getApplication<Application>())
 
     fun start() {
         val id = mutableHomeState.value.selectedInstance.id
@@ -324,7 +328,7 @@ class HomeViewModel(
             try {
                 if (!guestRuntime.isEngineAvailable()) {
                     mutableHomeState.update { current ->
-                        current.copy(message = "PRoot engine missing. Preinstalling engine…")
+                        current.copy(message = "PRoot engine missing. Checking signed APK payload…")
                     }
                     val fixed = autoInstallEngineInternal()
                     if (!fixed) {
@@ -696,6 +700,15 @@ private fun runtimeAbi(application: Application): String = try {
 } catch (_: Throwable) {
     NativeSetup.DEFAULT_ABI
 }
+
+/**
+ * The signed APK native payload directory (`ApplicationInfo.nativeLibraryDir`), or null
+ * when the installation exposes no native library directory (e.g. a build without any
+ * engine payload). The engine resolver handles null, so the caller must never construct
+ * `File(null)` — that throws on the main thread before AUTOFIX can run.
+ */
+private fun enginePayloadDir(application: Application): File? =
+    application.applicationInfo.nativeLibraryDir?.let(::File)
 
 /**
  * The Ed25519 keys this build trusts to sign RootFS manifests, read from the APK's
