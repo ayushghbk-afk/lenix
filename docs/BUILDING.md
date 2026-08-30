@@ -38,13 +38,25 @@ The APK will be at: `app/build/outputs/apk/release/app-release-unsigned.apk`
 
 ## CI/CD Build
 
-GitHub Actions automatically builds the APK on:
+GitHub Actions workflows:
+
+- `.github/workflows/build-apk.yml` — builds the debug APK and uploads the artifact
+- `.github/workflows/lint.yml` — runs `lintDebug` and unit tests
+- `.github/workflows/release.yml` — builds release APK on a `v*` tag and publishes it
+
+Build triggers:
 
 1. Push to `main` branch
 2. Push to any `arena/**` branch
 3. Manual workflow dispatch
 
-The workflow file is at: `.github/workflows/build-apk.yml`
+Scripts:
+
+```bash
+./scripts/build.sh   # assembleDebug
+./scripts/lint.sh    # lintDebug + testDebugUnitTest
+ANDROID_HOME=$HOME/Android/Sdk ./scripts/smoke.sh  # install and launch on a connected device
+```
 
 ## Android SDK Setup
 
