@@ -233,20 +233,31 @@ class ResumableDownloader(
         // real offset instead of jumping from 0% to the first chunk.
         onProgress(startOffset, spec.sizeBytes)
 
-        val written = FileOutputStream(partFile, true).use { output ->
-            val input = body.byteStream()
-            val buffer = ByteArray(CHUNK_BYTES)
-            var total = startOffset
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val read = input.read(buffer)
-                if (read < 0) break
-                output.write(buffer, 0, read)
-                total += read
-                onProgress(total, spec.sizeBytes)
+        val written = try {
+            FileOutputStream(partFile, true).use { output ->
+                val input = body.byteStream()
+                val buffer = ByteArray(CHUNK_BYTES)
+                var total = startOffset
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    output.write(buffer, 0, read)
+                    total += read
+                    onProgress(total, spec.sizeBytes)
+                }
+                output.flush()
+                total
             }
-            output.flush()
-            total
+        } catch (e: IOException) {
+            // Failures *mid-body* (connection reset, read timeout, truncated
+            // chunked encoding) are ordinary retryable network errors — the
+            // bytes already on disk stay as the resume point.
+            return retry(
+                "Network error while streaming ${spec.url}: ${e.message}",
+                VmError.NETWORK_ERROR,
+                discardPart = false,
+            )
         }
 
         if (written != spec.sizeBytes) {

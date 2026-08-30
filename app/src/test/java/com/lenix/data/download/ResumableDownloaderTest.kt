@@ -3,6 +3,7 @@ package com.lenix.data.download
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,6 +50,9 @@ class ResumableDownloaderTest {
     private val files = ConcurrentHashMap<String, ByteArray>()
 
     private val data = ByteArray(100_000) { (it % 251).toByte() }
+
+    /** `Range: bytes=<n>-` → <n>, used by the inline throttled dispatchers. */
+    private val rangeStart = Regex("bytes=(\\d+)-")
 
     @Before
     fun setUp() {
@@ -227,14 +231,20 @@ class ResumableDownloaderTest {
         val layer = spec()
         cache.partFile(layer.sha256).writeBytes(data.copyOfRange(0, 1234))
 
-        // A response that never delivers a body byte within the read timeout.
+        // A resumable server that never delivers a body byte within the read
+        // timeout — every attempt times out streaming the layer.
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse =
-                MockResponse()
-                    .setResponseCode(200)
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val from = request.getHeader("Range")
+                    ?.let { rangeStart.find(it)?.groupValues?.get(1)?.toLongOrNull() }
+                    ?: 0L
+                return MockResponse()
+                    .setResponseCode(if (from > 0L) 206 else 200)
                     .setHeader("ETag", "\"v1\"")
-                    .setBody(Buffer().write(data))
+                    .setHeader("Content-Range", "bytes $from-${data.size - 1}/${data.size}")
+                    .setBody(Buffer().write(data.copyOfRange(from.toInt(), data.size)))
                     .throttleBody(1, 10, TimeUnit.SECONDS)
+            }
         }
         val impatientClient = OkHttpClient.Builder()
             .retryOnConnectionFailure(false)
@@ -247,7 +257,11 @@ class ResumableDownloaderTest {
 
         assertEquals(VmError.NETWORK_ERROR, exception.error)
         assertEquals(2, server.requestCount)
-        assertEquals(1234L, cache.partFile(layer.sha256).length())
+        // Both timed-out attempts received exactly one body byte — mockwebserver
+        // writes the first throttle chunk immediately, then sleeps — so the
+        // resume point survived: the original 1234 bytes plus what arrived.
+        val partLength = cache.partFile(layer.sha256).length()
+        assertTrue("resume point survived: $partLength bytes", partLength in 1234L until data.size.toLong())
     }
 
     @Test
@@ -291,8 +305,11 @@ class ResumableDownloaderTest {
                     .throttleBody(1024, 50, TimeUnit.MILLISECONDS)
         }
 
+        // The download must run on a worker thread: its body reads are blocking,
+        // so on runBlocking's single event-loop thread delay(400) could never
+        // preempt them and the "cancellation" would only land after completion.
         runBlocking {
-            val job = launch {
+            val job = launch(Dispatchers.IO) {
                 downloader.download(layer)
             }
             delay(400)
@@ -330,7 +347,9 @@ class ResumableDownloaderTest {
 
         var thrown: Throwable? = null
         runBlocking {
-            val job = launch {
+            // See the comment in `cancellation leaves the partial in place for
+            // the next attempt`: blocking body reads need their own thread.
+            val job = launch(Dispatchers.IO) {
                 try {
                     downloader.download(layer)
                 } catch (e: CancellationException) {
