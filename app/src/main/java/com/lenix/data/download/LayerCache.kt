@@ -24,19 +24,19 @@ class LayerCache(
     /** Completed, verified layer file for [sha256] (may not exist yet). */
     fun cachedFile(sha256: String): File {
         requireValidSha256(sha256)
-        return File(ensureDir(), "$sha256$FINAL_SUFFIX")
+        return File(dir(), "$sha256$FINAL_SUFFIX")
     }
 
     /** Partial download for [sha256] — the byte-exact resume point. */
     fun partFile(sha256: String): File {
         requireValidSha256(sha256)
-        return File(ensureDir(), "$sha256$PART_SUFFIX")
+        return File(dir(), "$sha256$PART_SUFFIX")
     }
 
     /** ETag sidecar used to validate that a `.part` still matches the remote bytes. */
     fun etagFile(sha256: String): File {
         requireValidSha256(sha256)
-        return File(ensureDir(), "$sha256$ETAG_SUFFIX")
+        return File(dir(), "$sha256$ETAG_SUFFIX")
     }
 
     /**
@@ -59,7 +59,7 @@ class LayerCache(
             .sumOf { it.length() }
     }
 
-    private fun ensureDir(): File {
+    private fun dir(): File {
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
