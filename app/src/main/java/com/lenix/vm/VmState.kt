@@ -37,3 +37,16 @@ enum class VmState {
     /** The last operation failed. See [VmError] for the specific category. */
     ERROR,
 }
+
+/**
+ * True while an install or launch operation is in flight. Busy instances cannot be
+ * deleted — the installer or the guest owns files and processes underneath them.
+ */
+val VmState.isBusy: Boolean
+    get() = this == VmState.DOWNLOADING ||
+        this == VmState.VERIFYING ||
+        this == VmState.EXTRACTING ||
+        this == VmState.INSTALLING ||
+        this == VmState.STARTING ||
+        this == VmState.RUNNING ||
+        this == VmState.STOPPING

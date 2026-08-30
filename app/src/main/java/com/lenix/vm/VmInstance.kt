@@ -31,5 +31,38 @@ data class VmInstance(
             codename = "bookworm",
             version = "12",
         )
+
+        /**
+         * Normalizes a persisted state after the app process died.
+         *
+         * Transient states can never survive a process restart: the guest dies with
+         * the app, and an in-flight install has no worker left. Anything that was
+         * starting/running/stopping becomes READY again (the RootFS is installed and
+         * the process is simply gone), and an interrupted install becomes ERROR with
+         * [VmError.INSTALL_INTERRUPTED] so the UI can offer retry/reset. Phase 3's
+         * resumable downloader will turn this into real install resumption instead.
+         */
+        fun recoveredForAppRestart(instance: VmInstance): VmInstance = when (instance.state) {
+            VmState.DOWNLOADING,
+            VmState.VERIFYING,
+            VmState.EXTRACTING,
+            VmState.INSTALLING,
+            -> instance.copy(
+                state = VmState.ERROR,
+                lastError = VmError.INSTALL_INTERRUPTED,
+                updatedAt = System.currentTimeMillis(),
+            )
+
+            VmState.STARTING,
+            VmState.RUNNING,
+            VmState.STOPPING,
+            -> instance.copy(
+                state = VmState.READY,
+                lastError = null,
+                updatedAt = System.currentTimeMillis(),
+            )
+
+            VmState.NOT_INSTALLED, VmState.READY, VmState.ERROR -> instance
+        }
     }
 }

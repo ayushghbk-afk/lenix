@@ -12,6 +12,7 @@ enum class VmError {
     DOWNLOAD_CORRUPTED,
     CHECKSUM_FAILED,
     ROOTFS_EXTRACTION_FAILED,
+    INSTALL_INTERRUPTED,
     UNSUPPORTED_ARCHITECTURE,
     NATIVE_ENGINE_FAILED,
     PROCESS_CRASHED,
@@ -25,6 +26,7 @@ private fun VmError.defaultMessage(): String = when (this) {
     VmError.DOWNLOAD_CORRUPTED -> "The downloaded file was damaged or incomplete."
     VmError.CHECKSUM_FAILED -> "The RootFS checksum did not match the signed manifest."
     VmError.ROOTFS_EXTRACTION_FAILED -> "The RootFS could not be extracted."
+    VmError.INSTALL_INTERRUPTED -> "The install was interrupted. Retry it or reset the instance."
     VmError.UNSUPPORTED_ARCHITECTURE -> "This device architecture is not supported yet."
     VmError.NATIVE_ENGINE_FAILED -> "The native Lenix engine failed to start."
     VmError.PROCESS_CRASHED -> "The Linux process exited unexpectedly."
