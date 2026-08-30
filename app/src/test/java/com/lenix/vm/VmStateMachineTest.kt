@@ -22,7 +22,10 @@ class VmStateMachineTest {
 
     @Test
     fun `start and stop are legal transitions`() {
-        val ready = machine.apply(VmInstance.DEFAULT, VmState.READY)
+        // Start/stop only applies to an installed instance: NOT_INSTALLED -> READY is
+        // illegal on purpose (see `invalid transitions are rejected` below and
+        // docs/ARCHITECTURE.md §7.4), so seed the machine with a ready one.
+        val ready = VmInstance.DEFAULT.copy(state = VmState.READY)
         val running = machine.apply(ready, VmState.STARTING).let { machine.apply(it, VmState.RUNNING) }
         val stopped = machine.apply(running, VmState.STOPPING).let { machine.apply(it, VmState.READY) }
         assertEquals(VmState.READY, stopped.state)
