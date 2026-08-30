@@ -198,12 +198,12 @@ class RootfsInstallerTest {
         val provenance = File(instanceDir(filesDir), "rootfs.json").readText()
         assertTrue(provenance.contains(releaseKey.second.keyIdHex))
         assertTrue(provenance.contains(sha256(baseArchive)))
-        assertTrue(Regex("\"bootCommand\"\s*:\s*\"/bin/bash\"").containsMatchIn(provenance))
+        assertTrue(Regex("\"bootCommand\"\\s*:\\s*\"/bin/bash\"").containsMatchIn(provenance))
         assertTrue(
             "the skipped /dev/null must be recorded, not silently dropped",
-            Regex("\"skippedSpecialEntries\"\s*:\s*1").containsMatchIn(provenance),
+            Regex("\"skippedSpecialEntries\"\\s*:\\s*1").containsMatchIn(provenance),
         )
-        assertTrue(Regex("\"entries\"\s*:\s*[1-9]").containsMatchIn(provenance))
+        assertTrue(Regex("\"entries\"\\s*:\\s*[1-9]").containsMatchIn(provenance))
     }
 
     private fun readOverlayed(rootfs: File): String = File(rootfs, "etc/debian_version").readText()

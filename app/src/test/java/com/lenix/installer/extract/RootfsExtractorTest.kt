@@ -247,7 +247,7 @@ class RootfsExtractorTest {
 
     @Test
     fun `progress is monotonic and ends at the extracted size`() {
-        val entries = (1..40).map { Entry(name = "dir$f/it", bytes = ByteArray(64 * 1024) { 'a'.code.toByte() }) }
+        val entries = (1..40).map { f -> Entry(name = "dir$f/it", bytes = ByteArray(64 * 1024) { 'a'.code.toByte() }) }
         val seen = ArrayList<ExtractionProgress>()
 
         val (root, report) = extract(

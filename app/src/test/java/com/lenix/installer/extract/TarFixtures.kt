@@ -37,7 +37,8 @@ internal object TarFixtures {
     fun tar(entries: List<Entry>): ByteArray {
         val out = ByteArrayOutputStream()
         TarArchiveOutputStream(out).use { tar ->
-            tar.longFileMode = TarArchiveOutputStream.LONGFILE_GNU
+            // commons-compress exposes only the setter here, so it is called directly.
+            tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU)
             entries.forEach { entry -> tar.write(entry) }
             tar.finish()
         }

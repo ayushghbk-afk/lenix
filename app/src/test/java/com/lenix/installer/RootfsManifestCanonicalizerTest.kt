@@ -62,11 +62,14 @@ class RootfsManifestCanonicalizerTest {
 
     @Test
     fun `escapes exactly the characters the python mirror escapes`() {
-        // The input is written with JSON escape sequences, so the manifest text itself
-        // stays plain ASCII. The canonical form keeps the short form for tab, re-escapes
-        // the control character, DEL and the non-ASCII letter, and escapes quotes.
-        val input = "{\"z\": \"caf\u005cu00e9 \u005cu0001 q\u005ct\u005cu007f \\"\"}"
-        val expected = "{\"z\":\"caf\u005cu00e9 \u005cu0001 q\u005ct\u005cu007f \\"\"}"
+        // Each JSON escape is spelled `\\u00e9` in source, i.e. an escaped backslash followed
+        // by the letters: the *document text* stays plain ASCII and holds real JSON escapes,
+        // while Kotlin never sees a `\u` escape of its own. The canonical form must keep the
+        // short form for tab and re-escape the control character, DEL, the non-ASCII letter
+        // and the quote — byte-for-byte what `scripts/canonical-json.py` emits for this same
+        // input, which is what makes the two implementations one contract.
+        val input = "{\"z\": \"caf\\u00e9 \\u0001 q\\t\\u007f \\\"\"}"
+        val expected = "{\"z\":\"caf\\u00e9 \\u0001 q\\t\\u007f \\\"\"}"
 
         assertEquals(expected, RootfsManifestCanonicalizer.canonicalText(input))
     }
