@@ -206,10 +206,15 @@ val fetchEnginePayload by tasks.registering(Exec::class) {
     doLast {
         val result = executionResult.get()
         if (result.exitValue != 0) {
+            // ::warning:: surfaces this in CI annotations, where the raw log is often
+            // not reachable.
             logger.warn(
-                "WARNING: scripts/fetch-engine.sh failed (exit ${result.exitValue}). " +
+                "::warning::scripts/fetch-engine.sh failed (exit ${result.exitValue}). " +
                     "The APK will have no PRoot engine unless you add it manually."
             )
+        } else {
+            val staged = payloadDir.list()?.sorted().orEmpty()
+            logger.lifecycle("fetch-engine.sh staged: " + staged.joinToString())
         }
     }
 }
