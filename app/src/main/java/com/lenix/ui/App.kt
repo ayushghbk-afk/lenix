@@ -2,6 +2,7 @@ package com.lenix.ui
 
 import android.app.Application
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +37,12 @@ fun LenixApp() {
     val homeViewModel: HomeViewModel = viewModel { HomeViewModel(application) }
     val homeUiState by homeViewModel.uiState.collectAsState()
 
+    LaunchedEffect(homeUiState.navigateTo) {
+        val dest = homeUiState.navigateTo ?: return@LaunchedEffect
+        navController.navigate(dest)
+        homeViewModel.consumeNavigation()
+    }
+
     NavHost(navController = navController, startDestination = Routes.HOME) {
         composable(Routes.HOME) {
             HomeScreen(
@@ -47,6 +54,8 @@ fun LenixApp() {
                 onReset = homeViewModel::reset,
                 onOpenInstance = { navController.navigate(Routes.INSTANCES) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenTerminal = { navController.navigate(Routes.TERMINAL) },
+                onOpenDesktop = { navController.navigate(Routes.DESKTOP) },
             )
         }
         composable(Routes.SETTINGS) {
@@ -72,12 +81,17 @@ fun LenixApp() {
         }
         composable(Routes.TERMINAL) {
             TerminalScreen(
+                session = homeViewModel.guestSession(),
                 onBack = { navController.popBackStack() },
                 onHome = { navController.popBackStack(Routes.HOME, inclusive = false) },
             )
         }
         composable(Routes.DESKTOP) {
-            DesktopScreen(onBack = { navController.popBackStack() })
+            DesktopScreen(
+                vncPort = homeViewModel.vncPort(),
+                running = homeUiState.selectedInstance.state == com.lenix.vm.VmState.RUNNING,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }

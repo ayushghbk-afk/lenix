@@ -58,6 +58,8 @@ fun HomeScreen(
     onReset: () -> Unit,
     onOpenInstance: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenTerminal: () -> Unit = {},
+    onOpenDesktop: () -> Unit = {},
 ) {
     val instance = state.selectedInstance
 
@@ -136,6 +138,8 @@ fun HomeScreen(
                     onStop = onStop,
                     onOpenInstance = onOpenInstance,
                     onReset = onReset,
+                    onOpenTerminal = onOpenTerminal,
+                    onOpenDesktop = onOpenDesktop,
                 )
 
                 OutlinedButton(
@@ -182,6 +186,8 @@ private fun VmCard(
     onStop: () -> Unit,
     onOpenInstance: () -> Unit,
     onReset: () -> Unit,
+    onOpenTerminal: () -> Unit,
+    onOpenDesktop: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -263,6 +269,22 @@ private fun VmCard(
                         },
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    Button(
+                        onClick = onOpenTerminal,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = instance.state == VmState.RUNNING,
+                    ) {
+                        Icon(Icons.Default.Terminal, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("TERMINAL")
+                    }
+                    Button(
+                        onClick = onOpenDesktop,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = instance.state == VmState.RUNNING,
+                    ) {
+                        Text("DESKTOP (OPENBOX)")
+                    }
                     OutlinedButton(
                         onClick = onStop,
                         modifier = Modifier.fillMaxWidth(),
@@ -289,8 +311,12 @@ private fun VmCard(
                                     "sign it (scripts/sign-rootfs-manifest.sh)."
                             VmError.UNSUPPORTED_COMPRESSION ->
                                 "This RootFS layer is compressed in a format the app cannot " +
-                                    "read yet — zstd arrives with the native engine in " +
-                                    "Phase 6. xz and gz layers work today."
+                                    "read yet — zstd needs libpvmnative. xz and gz layers work today."
+                            VmError.NATIVE_ENGINE_FAILED ->
+                                "PRoot is not installed on this device. Unpack the arm64-v8a " +
+                                    "engine into the app's native directory, then START again."
+                            VmError.VNC_CONNECTION_FAILED ->
+                                "The built-in viewer could not reach Xvnc on loopback."
                             VmError.CHECKSUM_FAILED ->
                                 "A downloaded layer did not hash to the digest the signed " +
                                     "manifest pins, so it was discarded. Retry the install."

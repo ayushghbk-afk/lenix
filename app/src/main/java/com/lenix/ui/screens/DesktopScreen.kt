@@ -22,21 +22,64 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.lenix.vnc.RfbClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
- * Desktop screen placeholder. The built-in RFB viewer / SurfaceView lands here in
- * Phase 3; for now the Home flow can navigate to a fake desktop to validate gesture
- * and navigation wiring.
+ * Built-in RFB viewer for the Openbox session (Phase 7 / ADR-003).
+ *
+ * Handshake runs on a background dispatcher; the framebuffer renderer is the
+ * next polish pass. Until Xvnc answers, a status card explains why.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DesktopScreen(
+    vncPort: Int?,
+    running: Boolean,
     onBack: () -> Unit,
 ) {
+    var status by remember { mutableStateOf("Waiting for Openbox / Xvnc …") }
+    var connected by remember { mutableStateOf(false) }
+
+    LaunchedEffect(vncPort, running) {
+        connected = false
+        if (!running || vncPort == null) {
+            status = if (!running) {
+                "Start the instance with Auto-start desktop, or START then open Desktop."
+            } else {
+                "No VNC port — this session is a shell. Enable Auto-start desktop in Settings."
+            }
+            return@LaunchedEffect
+        }
+        var lastError = "Connecting to 127.0.0.1:$vncPort"
+        status = lastError
+        repeat(20) { attempt ->
+            try {
+                val rfb = RfbClient(port = vncPort)
+                withContext(Dispatchers.IO) { rfb.handshake() }
+                connected = true
+                status = "Openbox • ${rfb.server.width}×${rfb.server.height} • 127.0.0.1:$vncPort (RFB 3.8)"
+                return@LaunchedEffect
+            } catch (e: Exception) {
+                lastError = e.message ?: "VNC connection failed"
+                status = "Retry ${attempt + 1}/20 — $lastError"
+                delay(500)
+            }
+        }
+        status = lastError
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -64,10 +107,7 @@ fun DesktopScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        color = Color(0xFF242A36),
-                        shape = RoundedCornerShape(16.dp),
-                    )
+                    .background(Color(0xFF242A36), RoundedCornerShape(16.dp))
                     .padding(24.dp),
             ) {
                 Icon(
@@ -77,19 +117,16 @@ fun DesktopScreen(
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
                 Text(
-                    text = "Openbox desktop preview",
+                    text = if (connected) "Openbox desktop connected" else "Openbox desktop",
                     color = Color.White,
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    text = "VNC viewer will render here in Phase 3.",
+                    text = status,
                     color = Color(0xFFB0B4BC),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Button(
-                    onClick = onBack,
-                    modifier = Modifier.padding(top = 20.dp),
-                ) {
+                Button(onClick = onBack, modifier = Modifier.padding(top = 20.dp)) {
                     Text("Return to Home")
                 }
             }

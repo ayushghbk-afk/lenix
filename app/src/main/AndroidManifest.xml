@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Network permissions for downloading rootfs -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -8,6 +9,7 @@
     <!-- Foreground service for running VM -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Vibration for haptics -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -25,12 +27,19 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Lenix">
+            android:theme="@style/Theme.Lenix"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".vm.service.VmRuntimeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34" />
 
     </application>
 

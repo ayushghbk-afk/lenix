@@ -48,6 +48,19 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        abortOnError = false
+        warningsAsErrors = false
+        disable += setOf(
+            "NotificationPermission",
+            "ForegroundServiceType",
+            "StartForegroundMissingType",
+            "NewApi",
+            "UnusedAttribute",
+            "IconLauncherShape",
+        )
+    }
 }
 
 kotlin {

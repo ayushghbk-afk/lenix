@@ -1,11 +1,25 @@
 package com.lenix
 
 import android.app.Application
+import android.os.Build
+import com.lenix.nativebridge.NativeBridge
+import com.lenix.nativebridge.NativeSetup
 
 class LenixApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        // App-wide initialization (Room, downloader, native setup) will be wired here
-        // in the next phase.
+        NativeBridge.tryLoad()
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
+        NativeSetup.installFromAssets(
+            destDir = NativeSetup.nativeDir(filesDir, abi),
+            abi = abi,
+            openAsset = { path ->
+                try {
+                    assets.open(path)
+                } catch (_: Exception) {
+                    null
+                }
+            },
+        )
     }
 }

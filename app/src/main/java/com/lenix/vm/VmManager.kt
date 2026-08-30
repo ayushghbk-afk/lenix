@@ -108,9 +108,8 @@ class VmManager(
         return upsert(updated)
     }
 
-    fun markRunning(id: String): VmInstance? {
+    fun markRunning(id: String, process: VmProcess = VmProcess(instanceId = id)): VmInstance? {
         val updated = setState(id, VmState.RUNNING) ?: return null
-        val process = VmProcess(instanceId = id)
         activeProcesses[id] = process
         mutableRunningProcesses.update { it + (id to process) }
         return updated
