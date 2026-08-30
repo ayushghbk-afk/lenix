@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.BigIntegerNode
 import com.fasterxml.jackson.databind.node.DoubleNode
 import com.fasterxml.jackson.databind.node.FloatNode
 import com.fasterxml.jackson.databind.node.IntNode
+import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.fasterxml.jackson.databind.node.LongNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
@@ -37,7 +38,11 @@ object RootfsManifestCanonicalizer {
     /** The manifest member holding the signature — never part of the signed payload. */
     const val SIGNATURE_MEMBER = "signature"
 
+    // `USE_BIG_DECIMAL_FOR_FLOATS` only steers data binding, not tree reading, so the node
+    // factory has to be told too — otherwise `2.5000` becomes a `DoubleNode` and prints
+    // `2.5`, which changes the signed payload. Exact big decimals are the whole point here.
     private val mapper: ObjectMapper = jacksonObjectMapper()
+        .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true))
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
         .enable(DeserializationFeature.USE_BIG_INTEGER_FOR_INTS)
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)

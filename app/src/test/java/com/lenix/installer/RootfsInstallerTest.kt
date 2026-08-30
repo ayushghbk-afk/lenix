@@ -215,15 +215,18 @@ class RootfsInstallerTest {
         // Simulate the aftermath of a killed install: base fully cached, the desktop
         // layer interrupted mid-download.
         val cache = LayerCache(File(filesDir, LayerCache.LAYER_DIR))
-        cache.cachedFile(sha256(baseArchive)).apply { parentFile.mkdirs() }.writeBytes(baseArchive)
-        cache.partFile(sha256(desktopArchive)).writeBytes(desktopArchive.copyOfRange(0, 2_000))
+        cache.cachedFile(sha256(baseArchive)).apply { parentFile?.mkdirs() }?.writeBytes(baseArchive)
+        // Interrupt the desktop layer one byte short of the end: fixtures are small, so the
+        // resume point is derived from the archive rather than a fixed offset.
+        val resumeAt = minOf(2_000L, desktopArchive.size.toLong() - 1L)
+        cache.partFile(sha256(desktopArchive)).writeBytes(desktopArchive.copyOfRange(0, resumeAt.toInt()))
 
         val progress = runInstall(filesDir)
 
         assertEquals(RootfsInstaller.Progress.Ready, progress.last())
-        // Only the desktop layer hit the network, resuming at byte 2000.
+        // Only the desktop layer hit the network, resuming at the saved offset.
         assertEquals(1, server.requestCount)
-        assertEquals("bytes=2000-", server.takeRequest().getHeader("Range"))
+        assertEquals("bytes=$resumeAt-", server.takeRequest().getHeader("Range"))
 
         // The first progress event already reflects the cached base layer.
         val first = progress.filterIsInstance<RootfsInstaller.Progress.Download>().first()

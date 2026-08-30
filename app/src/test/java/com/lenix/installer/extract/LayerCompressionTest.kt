@@ -25,8 +25,7 @@ class LayerCompressionTest {
             "tgz" to LayerCompression.GZIP,
             "none" to LayerCompression.NONE,
             "tar" to LayerCompression.NONE,
-            "zstd" to LayerCompression.ZSTD,
-            "zst" to LayerCompression.ZSTD,
+            "plain" to LayerCompression.NONE,
         ).forEach { (declared, expected) ->
             assertEquals(
                 "compression '$declared'",
@@ -51,8 +50,17 @@ class LayerCompressionTest {
 
     @Test
     fun `zstd is known but unreadable until the native engine lands`() {
-        assertTrue(LayerCompression.isKnown("zstd"))
+        // Known means the manifest may name it; unreadable means resolve() refuses to hand
+        // it to the extractor, which is a different failure from a typo in the manifest.
+        listOf("zstd", "zst", "ZSTD").forEach { declared ->
+            assertTrue("'$declared' is a known format", LayerCompression.isKnown(declared))
+            val refused = assertThrows(VmException::class.java) {
+                LayerCompression.resolve(declared, "https://example.invalid/base.tar.zst", "base")
+            }
+            assertEquals(VmError.UNSUPPORTED_COMPRESSION, refused.error)
+        }
         assertTrue(!LayerCompression.ZSTD.supportedByAppExtractor)
+        assertEquals(LayerCompression.ZSTD, LayerCompression.detectFromName("https://x/base.tar.zst"))
 
         val failure = assertThrows(VmException::class.java) {
             LayerCompression.resolve("zstd", "https://example.invalid/base.tar.zst", "base")

@@ -52,9 +52,6 @@ class RootfsManifestParser(
         require(manifest.layers.isNotEmpty()) {
             "Manifest ${manifest.id} contains no layers."
         }
-        require(manifest.signature.isNotBlank()) {
-            "Manifest ${manifest.id} is missing its signature."
-        }
         require(manifest.layers.size <= MAX_LAYERS) {
             "Manifest ${manifest.id} declares ${manifest.layers.size} layers; at most " +
                 "$MAX_LAYERS are supported."

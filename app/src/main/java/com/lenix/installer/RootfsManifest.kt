@@ -20,7 +20,13 @@ data class RootfsManifest(
     val layers: List<Layer>,
     val install: Install,
     val buildinfoUrl: String? = null,
-    val signature: String,
+    /**
+     * The manifest's own signature — see [RootfsManifestVerifier]. Absent or blank is
+     * representable here on purpose: "unsigned" is a *trust* verdict the verifier reports
+     * (as `SIGNATURE_FAILED`, with its own UI copy), not a schema error, so the parser must
+     * not be the one to call a missing signature "corrupt".
+     */
+    val signature: String = "",
 ) {
     data class Compatibility(
         val minAndroidSdk: Int = 29,

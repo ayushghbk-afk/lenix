@@ -63,12 +63,18 @@ class RootfsVerifierTest {
     @Test
     fun `a wrong digest fails as CHECKSUM_FAILED`() {
         val bytes = "hello".toByteArray()
-        val other = layer("goodbye".toByteArray())
+        // Same length as the bytes on disk, so the size gate lets it through and the hash is
+        // what refuses it — the two failures say different things to the user, so the fixture
+        // has to isolate one of them.
+        val wrong = layer("hellp".toByteArray())
 
-        val failure = assertThrows(VmException::class.java) { verifier.verifyLayer(file(bytes), other) }
+        val failure = assertThrows(VmException::class.java) {
+            verifier.verifyLayer(file(bytes), wrong)
+        }
 
         assertEquals(VmError.CHECKSUM_FAILED, failure.error)
         assertTrue(failure.message!!.contains("Expected"))
+        assertTrue(failure.message!!.contains(sha256("hellp".toByteArray())))
     }
 
     @Test

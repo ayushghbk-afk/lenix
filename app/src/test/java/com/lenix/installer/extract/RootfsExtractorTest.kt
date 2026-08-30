@@ -120,7 +120,7 @@ class RootfsExtractorTest {
         }
 
         assertEquals(VmError.ROOTFS_EXTRACTION_FAILED, exception.error)
-        assertTrue(exception.message!!.contains("outside"))
+        assertTrue(exception.message!!.contains("escaping path"))
         assertFalse(outside.exists())
     }
 

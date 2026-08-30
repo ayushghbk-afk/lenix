@@ -224,6 +224,13 @@ class RootfsExtractor(
 
             entry.isSymbolicLink -> createSymbolicLink(entry, target, relative, session)
             entry.isLink -> createHardLink(entry, target, relative, session)
+
+            // `TarArchiveEntry.isFile()` is defined as "not a directory and not a link", so
+            // it claims character devices, block devices and FIFOs too. They must be
+            // identified first or an app-uid filesystem would gain fake /dev entries.
+            entry.isCharacterDevice || entry.isBlockDevice || entry.isFIFO ->
+                skipSpecial(session)
+
             entry.isFile -> {
                 deleteIfLink(target, session)
                 writeFile(tar, target, entry, session)
@@ -231,13 +238,19 @@ class RootfsExtractor(
                 session.dirty = true
             }
 
-            else -> {
-                // Character/block devices, FIFOs, sockets, GNU dumpdirs: skipped, the guest
-                // gets /dev bind-mounted from the host at launch instead.
-                session.skippedSpecial++
-                session.dirty = true
-            }
+            else -> skipSpecial(session)
         }
+    }
+
+    /**
+     * Counts a member this platform cannot or should not materialize — device nodes, FIFOs,
+     * sockets, GNU dump directories. The guest gets `/dev` bind-mounted from the host at
+     * launch, so skipping is correct, but it is also *reported*: an install that skipped
+     * thousands of entries looks different from one that skipped three.
+     */
+    private fun skipSpecial(session: Session) {
+        session.skippedSpecial++
+        session.dirty = true
     }
 
     private fun createSymbolicLink(
@@ -434,7 +447,10 @@ class RootfsExtractor(
      * sticky bit, and directories always stay writable so extraction can continue.
      */
     private fun applyMode(target: File, mode: Int, directory: Boolean) {
-        val ownerBits = mode shr OWNER_SHIFT and OWNER_BITS
+        // Only the low 9 bits are permissions; tar archives also carry the file-type bits
+        // (S_IFREG, S_IFCHR, …) in the same field, and reading the owner nibble without
+        // masking them turns a plain 0644 file into an executable one.
+        val ownerBits = (mode and PERMISSION_BITS) shr OWNER_SHIFT
         val readable = ownerBits and 4 != 0 || directory
         val writable = ownerBits and 2 != 0 || directory
         val executable = ownerBits and 1 != 0 || directory
@@ -536,5 +552,8 @@ class RootfsExtractor(
         /** The tar mode field's owner bits start here. */
         private const val OWNER_SHIFT = 6
         private const val OWNER_BITS = 7
+
+        /** The permission bits of a tar mode field; everything above it is file type/setuid. */
+        private const val PERMISSION_BITS = 0b111_111_111
     }
 }

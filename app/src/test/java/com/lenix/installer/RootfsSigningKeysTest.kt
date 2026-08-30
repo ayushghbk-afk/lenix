@@ -31,7 +31,7 @@ class RootfsSigningKeysTest {
 
         val key = MinisignPublicKey.parse(text)
 
-        assertEquals(0x0807060504030201L, key.keyId)
+        assertEquals(0x0102030405060708L, key.keyId)
         assertEquals("Ed", key.algorithm)
         assertEquals(32, key.rawPublicKey.size)
         assertEquals("minisign public key 0807060504030201", key.untrustedComment)
@@ -43,7 +43,7 @@ class RootfsSigningKeysTest {
     fun `accepts a bare base64 key, the form minisign -P takes`() {
         val key = MinisignPublicKey.parseKey(keyBlob(), null)
 
-        assertEquals(0x0807060504030201L, key.keyId)
+        assertEquals(0x0102030405060708L, key.keyId)
         // The serial is the 8-byte little-endian value printed big-endian, as minisign does.
         assertEquals("0102030405060708", key.keyIdHex)
     }

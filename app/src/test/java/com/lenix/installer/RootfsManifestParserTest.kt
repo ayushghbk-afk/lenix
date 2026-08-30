@@ -68,14 +68,13 @@ class RootfsManifestParserTest {
     }
 
     @Test
-    fun `rejects a missing or blank signature`() {
-        listOf(null, "", "   ").forEach { signature ->
-            val failure = assertThrows(
-                "signature '$signature' must not be accepted",
-                IllegalArgumentException::class.java,
-            ) { parser.parse(manifestWith(signature)) }
-            assertTrue(failure.message!!.contains("signature"))
-        }
+    fun `a missing or blank signature is a trust verdict, not a schema error`() {
+        // "unsigned" has to surface as SIGNATURE_FAILED (its own UI copy), so the parser
+        // deliberately accepts the document and leaves the verdict to the verifier;
+        // RootfsManifestVerifierTest covers the rejection.
+        assertEquals("", parser.parse(manifestWith(null)).signature)
+        assertEquals("", parser.parse(manifestWith("")).signature)
+        assertTrue(parser.parse(manifestWith("   ")).signature.isBlank())
     }
 
     @Test
