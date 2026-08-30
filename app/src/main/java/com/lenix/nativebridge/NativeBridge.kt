@@ -7,6 +7,9 @@ package com.lenix.nativebridge
  * terminal falls back to pipe-backed stdio when [openPtyMaster] is unavailable,
  * and zstd extraction stays refused until this `.so` actually loads. Callers must
  * check [available] rather than assuming JNI is present.
+ *
+ * Native methods are invoked reflectively so this class still compiles when the
+ * NDK / `.so` is not part of the APK (no `external` declarations).
  */
 object NativeBridge {
 
@@ -18,7 +21,7 @@ object NativeBridge {
     var loadError: String? = "libpvmnative.so is not bundled in this build"
         private set
 
-    fun tryLoad(loader: () -> Unit = DEFAULT_LOADER): Boolean {
+    fun tryLoad(loader: () -> Unit = { System.loadLibrary("pvmnative") }): Boolean {
         if (available) return true
         return try {
             loader()
@@ -38,19 +41,27 @@ object NativeBridge {
      */
     fun openPtyMaster(): Int {
         if (!available) return -1
-        return nativeOpenPty()
+        return invokeNative("nativeOpenPty") as? Int ?: -1
     }
 
     fun killProcessGroup(pid: Long, signal: Int): Boolean {
         if (!available) return false
-        return nativeKillpg(pid, signal)
+        return invokeNative("nativeKillpg", pid, signal) as? Boolean ?: false
     }
 
-    private external fun nativeOpenPty(): Int
-
-    private external fun nativeKillpg(pid: Long, signal: Int): Boolean
-
-    private val DEFAULT_LOADER: () -> Unit = {
-        System.loadLibrary("pvmnative")
+    private fun invokeNative(name: String, vararg args: Any): Any? = try {
+        val types = args.map { arg ->
+            when (arg) {
+                is Int -> Int::class.javaPrimitiveType
+                is Long -> Long::class.javaPrimitiveType
+                is Boolean -> Boolean::class.javaPrimitiveType
+                else -> arg.javaClass
+            }
+        }.toTypedArray()
+        val method = javaClass.getDeclaredMethod(name, *types)
+        method.isAccessible = true
+        method.invoke(this, *args)
+    } catch (_: Throwable) {
+        null
     }
 }

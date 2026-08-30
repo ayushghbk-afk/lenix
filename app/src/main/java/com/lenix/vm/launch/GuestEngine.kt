@@ -101,7 +101,7 @@ class ProcessGuestSession(
     private val process: Process,
     override val vncPort: Int?,
 ) : GuestSession {
-    override val pid: Long = process.pid()
+    override val pid: Long = pidOf(process)
     override val stdin: OutputStream = process.outputStream
     override val stdout: InputStream = process.inputStream
 
@@ -112,6 +112,16 @@ class ProcessGuestSession(
         if (!process.waitFor(graceMs, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
             process.waitFor(2, TimeUnit.SECONDS)
+        }
+    }
+
+    companion object {
+        /** [Process.pid] is API 31; v0.1 minSdk is 29, so call it only if present. */
+        fun pidOf(process: Process): Long = try {
+            val method = Process::class.java.getMethod("pid")
+            (method.invoke(process) as? Long) ?: 0L
+        } catch (_: Throwable) {
+            0L
         }
     }
 }

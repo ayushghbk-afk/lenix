@@ -10,15 +10,13 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import androidx.annotation.RequiresApi
 import com.lenix.R
 import com.lenix.ui.MainActivity
 
 /**
  * Foreground service that keeps a running guest visible to the user (ADR-012).
  *
- * Started from [com.lenix.ui.HomeViewModel] when settings.allowBackground is on,
- * or always while a guest is RUNNING so Android is less likely to kill the tree.
+ * Started from [com.lenix.ui.HomeViewModel] when settings.allowBackground is on.
  */
 class VmRuntimeService : Service() {
 
@@ -29,7 +27,7 @@ class VmRuntimeService : Service() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Lenix")
             .setContentText("Linux environment is running")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_lenix)
             .setContentIntent(
                 PendingIntent.getActivity(
                     this,
@@ -41,7 +39,11 @@ class VmRuntimeService : Service() {
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
