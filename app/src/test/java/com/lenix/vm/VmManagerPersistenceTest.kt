@@ -39,7 +39,7 @@ class VmManagerPersistenceTest {
     }
 
     @Test
-    fun `state transitions are persisted and survive a restart`() {
+    fun `mid-install state is persisted and normalized on restart`() {
         val dir = newDir()
         val manager = newManager(dir)
         val id = manager.selectedInstance().id
@@ -48,7 +48,14 @@ class VmManagerPersistenceTest {
         manager.markVerifying(id)
         manager.markExtracting(id)
 
-        assertEquals(VmState.EXTRACTING, restarted(dir).getInstance(id)?.state)
+        // The raw record on disk carries the latest transition...
+        assertEquals(VmState.EXTRACTING, JsonInstanceStore(dir).loadAll().single().state)
+
+        // ...and constructing a manager again ("the app restarted") normalizes the
+        // interrupted install to a retryable error (VmInstance.recoveredForAppRestart).
+        val reloaded = restarted(dir)
+        assertEquals(VmState.ERROR, reloaded.getInstance(id)?.state)
+        assertEquals(VmError.INSTALL_INTERRUPTED, reloaded.getInstance(id)?.lastError)
     }
 
     @Test
