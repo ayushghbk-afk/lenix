@@ -468,4 +468,55 @@ installer filter.
 
 ---
 
+## ADR-023 — Engine dependencies ship from their own Termux packages, fetch fails hard (accepted)
+
+**Context:** Devices still refused to start the guest with
+
+> PRoot 'arm64-v8a' payload is present but its shared library dependencies are
+> missing: libtalloc.so, libandroid-shmem.so
+
+`EngineInstaller` was doing its job (ADR-022's on-device validation), which meant the
+APK really did carry `libproot.so` + `libprootloader.so` but not the two `.so` deps.
+The cause was in `scripts/fetch-engine.sh`: Termux's `proot` package declares
+`TERMUX_PKG_DEPENDS="libandroid-shmem, libtalloc"` — the deps are **separate
+packages** (`libtalloc_2.4.3`, `libandroid-shmem_0.7`), and Termux `.deb`s only ship
+their own files. The script looked for `lib/libtalloc.so.2` and
+`lib/libandroid-shmem.so` *inside the proot `.deb`*, found neither, printed a
+WARNING, skipped them and exited 0. The payload directory was non-empty, so the
+Gradle "is there any `lib*.so`" fetch-gate and the APK check (which only asserted
+`libproot.so`) both passed. Every APK built from that script was broken, and CI had
+no way to notice.
+
+**Decision:**
+
+- `fetch-engine.sh` downloads **three** `.deb`s — `proot`, `libtalloc`,
+  `libandroid-shmem` — extracts each payload from its own package, and stages
+  `libproot.so`, `libprootloader.so`, `libprootloader32.so` (optional),
+  `libtalloc.so` (patched from `libtalloc.so.2`), `libandroid-shmem.so`. The
+  aarch64 `.deb`s are SHA-256 pinned by default, overridable via
+  `PROOT_DEB_URL`/`TALLOC_DEB_URL`/`SHMEM_DEB_URL` and the matching `*_SHA256`
+  variables (empty string disables pinning).
+- Missing **required** files now abort the script (exit 1) instead of
+  warn-and-skip; the ELF magic/`e_machine` sanity check covers every staged file,
+  dependencies included.
+- The Gradle fetch gate re-runs `fetch-engine.sh` until the **required set** is
+  complete, not merely until *some* `lib*.so` exists — a half-staged payload no
+  longer skips the fetch forever.
+- `scripts/verify-payload.sh` (new) hard-fails when any required file is missing in
+  `jniLibs/<abi>/`; `scripts/verify-apk-engine.sh` now asserts all four required
+  entries inside the built APK, for both debug and release outputs. CI workflows run
+  fetch → payload check → build → APK check explicitly, so a broken engine pipeline
+  fails the job instead of shipping.
+- Device-side guidance: uninstall before reinstalling a rebuilt APK —
+  `adb install -r` can keep an older install's extracted payload, masking the fix.
+
+**Consequences:** An APK can no longer be produced with a half-present engine. The
+four-stage pipeline (fetch → `jniLibs` gate → APK gate → on-device `EngineInstaller`
+check) catches the failure at the earliest stage where it can still be fixed
+automatically, and CI fails loudly at every later stage. Future Termux version bumps
+need only update the three version variables (the SHA-256 pins force the bump to be
+deliberate).
+
+---
+
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*

@@ -149,6 +149,21 @@ dependencies {
  */
 val engineAbis = listOf("arm64-v8a")
 
+/**
+ * Files the guest cannot start without, per ABI (docs/NATIVE_BINARIES.md H1–H1c).
+ *
+ * libtalloc.so and libandroid-shmem.so are the Termux proot build's shared-library
+ * dependencies — they ship in SEPARATE Termux packages, so a fetch that only unpacked
+ * the proot .deb produces a payload that passes a mere "is it non-empty" check while
+ * the app still refuses to start the guest ("dependencies are missing"). These names
+ * must stay in sync with scripts/verify-payload.sh and scripts/verify-apk-engine.sh.
+ */
+val engineRequiredFiles: Map<String, List<String>> = mapOf(
+    "arm64-v8a" to listOf(
+        "libproot.so", "libprootloader.so", "libtalloc.so", "libandroid-shmem.so"
+    ),
+)
+
 // Plain (abi -> dir) pairs resolved during configuration: the checks below run at
 // execution time and must not touch `Project` (configuration-cache safe).
 val enginePayloadDirs: List<Pair<String, File>> =
@@ -156,24 +171,34 @@ val enginePayloadDirs: List<Pair<String, File>> =
 
 // Pure lambda (no script/Project capture) so the providers below stay
 // configuration-cache safe.
-val engineProblemsOf: (List<Pair<String, File>>) -> List<String> = { dirs ->
-    dirs.flatMap { (abi, dir) ->
-        val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
-        if (files.isEmpty()) {
-            listOf(
-                "No PRoot engine payload in app/src/main/jniLibs/$abi/ — " +
+val engineProblemsOf: (List<Pair<String, File>>, Map<String, List<String>>) -> List<String> =
+    { dirs, required ->
+        dirs.flatMap { (abi, dir) ->
+            val files = dir.listFiles()?.filter { it.isFile && it.name != ".gitkeep" }.orEmpty()
+            val problems = mutableListOf<String>()
+            if (files.isEmpty()) {
+                problems += "No PRoot engine payload in app/src/main/jniLibs/$abi/ — " +
                     "run ./scripts/fetch-engine.sh $abi"
-            )
-        } else {
-            files.map { it.name }
-                .filterNot { it.startsWith("lib") && it.endsWith(".so") }
-                .map {
-                    "app/src/main/jniLibs/$abi/$it is not named lib*.so, so Android " +
-                        "will not extract it from the APK — re-run ./scripts/fetch-engine.sh $abi"
+            } else {
+                files.map { it.name }
+                    .filterNot { it.startsWith("lib") && it.endsWith(".so") }
+                    .forEach {
+                        problems += "app/src/main/jniLibs/$abi/$it is not named lib*.so, so " +
+                            "Android will not extract it from the APK — re-run " +
+                            "./scripts/fetch-engine.sh $abi"
+                    }
+                required[abi].orEmpty().forEach { name ->
+                    if (files.none { it.name == name }) {
+                        problems += "Missing required engine file " +
+                            "app/src/main/jniLibs/$abi/$name (the Termux proot build " +
+                            "depends on it and the guest will not start without it) — " +
+                            "run ./scripts/fetch-engine.sh $abi"
+                    }
                 }
+            }
+            problems
         }
     }
-}
 
 /**
  * Fetches the engine payload as part of the build.
@@ -192,13 +217,15 @@ val fetchEnginePayload by tasks.registering(Exec::class) {
     val script = rootProject.file("scripts/fetch-engine.sh")
     val payloadDir = file("src/main/jniLibs/$abi")
 
-    // Skip entirely once a correctly named payload exists, so rebuilds need no network.
-    // Deliberately `onlyIf` rather than `outputs.dir(payloadDir)`: the payload lives in
-    // the source tree, and declaring it as a task output invites Gradle's stale-output
-    // cleanup to delete files there.
+    // Skip only when the payload is COMPLETE. Checking "any lib*.so present" let a
+    // half-staged payload (e.g. libproot.so + loader but no libtalloc/libandroid-shmem,
+    // produced by older fetch-engine.sh runs) skip the fetch forever and ship a broken
+    // APK. Deliberately `onlyIf` rather than `outputs.dir(payloadDir)`: the payload
+    // lives in the source tree, and declaring it as a task output invites Gradle's
+    // stale-output cleanup to delete files there.
     onlyIf {
-        payloadDir.listFiles()
-            ?.none { it.isFile && it.name.startsWith("lib") && it.name.endsWith(".so") } ?: true
+        val present = payloadDir.listFiles()?.map { it.name }?.toSet().orEmpty()
+        engineRequiredFiles[abi].orEmpty().any { it !in present }
     }
 
     commandLine("bash", script.absolutePath, abi)
@@ -231,8 +258,9 @@ val verifyEnginePayload by tasks.registering {
     // Read through a provider so the task holds no Project reference at execution time
     // (configuration-cache safe).
     val dirs = enginePayloadDirs
+    val required = engineRequiredFiles
     val check = engineProblemsOf
-    val problems = provider { check(dirs) }
+    val problems = provider { check(dirs, required) }
     doLast {
         val found = problems.get()
         if (found.isNotEmpty()) {
@@ -249,8 +277,9 @@ val warnEnginePayload by tasks.registering {
     description = "Warns (without failing) when a debug build has no usable engine payload."
     if (!skipEngineFetch) dependsOn(fetchEnginePayload)
     val dirs = enginePayloadDirs
+    val required = engineRequiredFiles
     val check = engineProblemsOf
-    val problems = provider { check(dirs) }
+    val problems = provider { check(dirs, required) }
     doLast { problems.get().forEach { logger.warn("WARNING: $it") } }
 }
 
@@ -278,22 +307,38 @@ tasks.matching { it.name == "assembleDebug" }
  * The source-tree checks above can pass while the APK still ends up without a usable
  * engine (a packaging rule drops the payload, a file gets renamed, the fetch runs
  * after packaging). `scripts/verify-apk-engine.sh` opens the real archive and asserts
- * `lib/<abi>/` contains an entry Android will actually extract, emitting `::error::`
- * so the reason shows up in CI annotations.
+ * `lib/<abi>/` contains every required entry Android will actually extract, emitting
+ * `::error::` so the reason shows up in CI annotations.
  */
-val verifyApkEngine by tasks.registering(Exec::class) {
-    group = "verification"
-    description = "Asserts the built APK carries an extractable engine under lib/<abi>/."
-
+fun registerVerifyApkEngine(buildType: String): TaskProvider<Exec> {
     val abi: String = engineAbis.first()
     val script: File = rootProject.file("scripts/verify-apk-engine.sh")
-    val apkDir: File = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
-
-    onlyIf { apkDir.isDirectory }
-    commandLine("bash", script.absolutePath, apkDir.absolutePath, abi)
+    val apkDir: File = layout.buildDirectory.dir("outputs/apk/$buildType").get().asFile
+    val payloadDir: File = file("src/main/jniLibs/$abi")
+    val required: List<String> = engineRequiredFiles[abi].orEmpty()
+    return tasks.registering(Exec::class) {
+        group = "verification"
+        description = "Asserts the built $buildType APK carries an extractable engine under lib/<abi>/."
+        // Run only once an APK exists AND the source payload was complete. An
+        // incomplete source payload is already handled by warnEnginePayload (debug)
+        // / verifyEnginePayload (release) — failing again here would break the
+        // "debug builds only warn, so UI work stays possible offline" promise.
+        // Packaging bugs (files present in the tree but dropped from the APK) still
+        // fail here. CI additionally runs the script explicitly after assemble*, so
+        // an incomplete payload always fails the job there.
+        onlyIf {
+            apkDir.isDirectory &&
+                required.all { name -> File(payloadDir, name).isFile }
+        }
+        commandLine("bash", script.absolutePath, apkDir.absolutePath, abi)
+    }
 }
 
-tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(verifyApkEngine) }
+val verifyApkEngineDebug = registerVerifyApkEngine("debug")
+val verifyApkEngineRelease = registerVerifyApkEngine("release")
+
+tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(verifyApkEngineDebug) }
+tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verifyApkEngineRelease) }
 
 /**
  * CI reads the console, not the HTML report, so a failing test has to explain itself there:

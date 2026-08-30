@@ -4,14 +4,24 @@
 # The source-tree checks in app/build.gradle.kts can pass while the APK still ends up
 # without an engine (a packaging rule drops the payload, a file gets renamed, the
 # fetch runs after packaging). This opens the real archive and asserts that
-# lib/<abi>/ holds an entry Android will actually extract — the property the whole
-# fix depends on (docs/DECISIONS.md ADR-022).
+# lib/<abi>/ holds every entry Android will actually extract AND the app needs —
+# the property the whole fix depends on (docs/DECISIONS.md ADR-022).
+#
+# Required: libproot.so, libprootloader.so, libtalloc.so, libandroid-shmem.so
+#           (libtalloc/libandroid-shmem come from SEPARATE Termux packages; an APK
+#            without them installs fine and fails on-device with
+#            "dependencies are missing: libtalloc.so, libandroid-shmem.so").
+# Optional: libprootloader32.so
 #
 # Usage: scripts/verify-apk-engine.sh <apk-dir-or-file> [abi]
 set -euo pipefail
 
 TARGET="${1:?usage: verify-apk-engine.sh <apk-dir-or-file> [abi]}"
 ABI="${2:-arm64-v8a}"
+
+# Keep in sync with scripts/verify-payload.sh and NativeSetup.
+REQUIRED="libproot.so libprootloader.so libtalloc.so libandroid-shmem.so"
+OPTIONAL="libprootloader32.so"
 
 if [ -d "$TARGET" ]; then
   mapfile -t APKS < <(find "$TARGET" -maxdepth 1 -name '*.apk' -type f | sort)
@@ -26,7 +36,9 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_PAYLOAD="$ROOT/app/src/main/jniLibs/$ABI"
-staged="$(ls -A "$SRC_PAYLOAD" 2>/dev/null | tr '\n' ' ')"
+# `|| true`: an absent source payload dir is a finding the checks below report, not a
+# reason to die here (ls exits 2 on a missing dir and would kill the script under set -e).
+staged="$(ls -A "$SRC_PAYLOAD" 2>/dev/null | tr '\n' ' ' || true)"
 echo "Source payload ($SRC_PAYLOAD): ${staged:-(empty)}"
 
 status=0
@@ -54,10 +66,18 @@ PY
     continue
   fi
 
-  if ! echo "$names" | grep -qx "libproot.so"; then
-    echo "::error::$(basename "$apk") has no lib/$ABI/libproot.so — the app will fail at START with NATIVE_ENGINE_FAILED. lib/$ABI/ contains: ${listing}" >&2
-    status=1
-  fi
+  for file in $REQUIRED; do
+    if ! echo "$names" | grep -qx "$file"; then
+      echo "::error::$(basename "$apk") has no lib/$ABI/$file — the app will fail at START with NATIVE_ENGINE_FAILED. lib/$ABI/ contains: ${listing}" >&2
+      status=1
+    fi
+  done
+
+  for file in $OPTIONAL; do
+    if ! echo "$names" | grep -qx "$file"; then
+      echo "::warning::$(basename "$apk") has no lib/$ABI/$file (optional — only needed for 32-bit guests)." >&2
+    fi
+  done
 
   # Anything not named lib*.so is packaged but never extracted on a release build.
   stray="$(echo "$names" | grep -v '^lib.*\.so$' || true)"

@@ -36,6 +36,45 @@ The APK will be at: `app/build/outputs/apk/release/app-release-unsigned.apk`
 ./gradlew dependencies --configuration debugRuntimeClasspath
 ```
 
+## PRoot engine payload
+
+The APK's PRoot engine comes from Termux's official packages and is **not committed
+to git** (GPL binaries). Fetch and verify it before building:
+
+```bash
+./scripts/fetch-engine.sh arm64-v8a    # proot + libtalloc + libandroid-shmem
+./scripts/verify-payload.sh arm64-v8a  # hard-fails if any required file is missing
+```
+
+`fetch-engine.sh` downloads **three** Termux packages: `proot` itself plus
+`libtalloc` and `libandroid-shmem`. The latter two are separate `.deb`s — proot only
+*declares them as dependencies* — so a fetch that unpacked just the proot package
+produced APKs that failed on-device with
+*"payload is present but its shared library dependencies are missing"*.
+
+`assembleDebug` runs the fetch automatically when the payload is incomplete
+(`-PskipEngineFetch=true` skips it). After the build, check what actually made it
+into the APK:
+
+```bash
+./scripts/verify-apk-engine.sh app/build/outputs/apk/debug arm64-v8a
+unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/arm64-v8a"
+```
+
+Expected under `app/src/main/jniLibs/arm64-v8a/`:
+
+```
+libproot.so            # required — the engine
+libprootloader.so      # required — PRoot's static guest loader
+libprootloader32.so    # optional — 32-bit guests only
+libtalloc.so           # required — proot's shared-library dependency
+libandroid-shmem.so    # required — proot's shared-library dependency
+```
+
+**Stale installs:** `adb install -r` can keep an older install's extracted native
+payload around, so a fixed engine appears not to take effect. Uninstall the app
+before reinstalling a rebuilt APK (`scripts/smoke.sh` does this).
+
 ## RootFS Manifest Signing
 
 Every manifest the app reads — including the one bundled in `app/src/main/assets/rootfs/` —
