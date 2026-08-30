@@ -52,6 +52,7 @@ fun LenixApp() {
                 onStart = homeViewModel::start,
                 onStop = homeViewModel::stop,
                 onReset = homeViewModel::reset,
+                onAutofixEngine = homeViewModel::autofixEngine,
                 onOpenInstance = { navController.navigate(Routes.INSTANCES) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenTerminal = { navController.navigate(Routes.TERMINAL) },

@@ -2,6 +2,7 @@ package com.lenix
 
 import android.app.Application
 import android.os.Build
+import com.lenix.nativebridge.EngineInstaller
 import com.lenix.nativebridge.NativeBridge
 import com.lenix.nativebridge.NativeSetup
 
@@ -10,8 +11,8 @@ class LenixApp : Application() {
         super.onCreate()
         NativeBridge.tryLoad()
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: NativeSetup.DEFAULT_ABI
-        NativeSetup.installFromAssets(
-            destDir = NativeSetup.nativeDir(filesDir, abi),
+        EngineInstaller.ensureOrInstallEngine(
+            filesDir = filesDir,
             abi = abi,
             openAsset = { path ->
                 try {
