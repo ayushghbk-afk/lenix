@@ -24,20 +24,52 @@
 # $PROOT_LOADER. The SONAME/DT_NEEDED entries are patched to match the new file names
 # so the bionic linker still resolves the deps.
 #
-# Pulls the Termux proot package .deb (bionic-linked PRoot + its static loader + the
-# libtalloc/libandroid-shmem deps) and unpacks the right pieces. Works on Ubuntu CI
-# (ar + tar). Override the URL with PROOT_DEB_URL for pinning / mirrors.
+# libtalloc / libandroid-shmem are SEPARATE Termux packages, not files inside the
+# proot .deb: proot declares them as TERMUX_PKG_DEPENDS, and Termux .debs only ship
+# their own files. Fetching just the proot .deb and looking for its lib/ directory is
+# the bug that produced APKs whose engine reported
+#   "payload is present but its shared library dependencies are missing:
+#    libtalloc.so, libandroid-shmem.so"
+# This script downloads all three .debs (aarch64 SHA-256 pinned; override
+# PROOT_DEB_URL / TALLOC_DEB_URL / SHMEM_DEB_URL, or set the matching *_SHA256
+# variables to "" to disable pinning). Works on Ubuntu CI (ar + tar).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ABI="${1:-arm64-v8a}"
-DEB_ARCH="${DEB_ARCH:-aarch64}"
 TARGET_DIR="$ROOT/app/src/main/jniLibs/$ABI"
+
+# Termux pool layout is pool/main/<prefix4>/<pkg>/<pkg>_<version>_<debarch>.deb.
+case "$ABI" in
+  arm64-v8a)   DEB_ARCH="${DEB_ARCH:-aarch64}" ;;
+  x86_64)      DEB_ARCH="${DEB_ARCH:-x86_64}" ;;
+  armeabi-v7a) DEB_ARCH="${DEB_ARCH:-arm}" ;;
+  x86)         DEB_ARCH="${DEB_ARCH:-i686}" ;;
+  *) echo "ERROR: unsupported ABI $ABI" >&2; exit 1 ;;
+esac
+
+PKG_ROOT="https://packages.termux.dev/apt/termux-main/pool/main"
+
 PROOT_VERSION="${PROOT_VERSION:-5.1.107.92}"
-PROOT_DEB_URL="${PROOT_DEB_URL:-https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${PROOT_VERSION}_${DEB_ARCH}.deb}"
-# Optional pinning: set PROOT_DEB_SHA256 to the .deb's SHA-256 (from the Termux
-# Packages index for this version) to fail on unexpected content.
-PROOT_DEB_SHA256="${PROOT_DEB_SHA256:-}"
+TALLOC_VERSION="${TALLOC_VERSION:-2.4.3}"
+SHMEM_VERSION="${SHMEM_VERSION:-0.7}"
+
+PROOT_DEB_URL="${PROOT_DEB_URL:-$PKG_ROOT/p/proot/proot_${PROOT_VERSION}_${DEB_ARCH}.deb}"
+TALLOC_DEB_URL="${TALLOC_DEB_URL:-$PKG_ROOT/libt/libtalloc/libtalloc_${TALLOC_VERSION}_${DEB_ARCH}.deb}"
+SHMEM_DEB_URL="${SHMEM_DEB_URL:-$PKG_ROOT/liba/libandroid-shmem/libandroid-shmem_${SHMEM_VERSION}_${DEB_ARCH}.deb}"
+
+# SHA-256 pins for the aarch64 payloads (the ABI CI and the release APK ship). Pins are
+# per-arch; other arches default to unpinned unless overridden. Set the variable to the
+# empty string to disable pinning (e.g. when testing a newer Termux build).
+if [ "$DEB_ARCH" = "aarch64" ]; then
+  PROOT_DEB_SHA256="${PROOT_DEB_SHA256-1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9}"
+  TALLOC_DEB_SHA256="${TALLOC_DEB_SHA256-ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da}"
+  SHMEM_DEB_SHA256="${SHMEM_DEB_SHA256-0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6}"
+else
+  PROOT_DEB_SHA256="${PROOT_DEB_SHA256:-}"
+  TALLOC_DEB_SHA256="${TALLOC_DEB_SHA256:-}"
+  SHMEM_DEB_SHA256="${SHMEM_DEB_SHA256:-}"
+fi
 
 # Payload file names — these MUST match com.lenix.nativebridge.NativeSetup.
 OUT_PROOT="libproot.so"
@@ -50,55 +82,103 @@ WORK="$(mktemp -d)"
 STAGE="$WORK/stage"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Fetching PRoot ${PROOT_VERSION} (${DEB_ARCH}) from $PROOT_DEB_URL ..."
-curl -fsSL "$PROOT_DEB_URL" -o "$WORK/proot.deb"
+# ---- .deb download + unpack ------------------------------------------------------
 
-if [ -n "$PROOT_DEB_SHA256" ]; then
-  actual="$(sha256sum "$WORK/proot.deb" | awk '{print $1}')"
-  if [ "$actual" != "$PROOT_DEB_SHA256" ]; then
-    echo "ERROR: proot .deb SHA-256 mismatch (got $actual, want $PROOT_DEB_SHA256)." >&2
+fetch_deb() {
+  local url="$1" out="$2" sha256="$3"
+  echo "Fetching $url ..."
+  curl -fsSL --retry 3 --retry-delay 2 "$url" -o "$out"
+  if [ -n "$sha256" ]; then
+    actual="$(sha256sum "$out" | awk '{print $1}')"
+    if [ "$actual" != "$sha256" ]; then
+      echo "ERROR: $(basename "$out") SHA-256 mismatch (got $actual, want $sha256)." >&2
+      exit 1
+    fi
+    echo "  sha256 OK"
+  fi
+}
+
+# .deb = ar archive; member may be data.tar.xz / .gz / .zst depending on when Termux
+# built the package. GNU ar returns 0 even when the named member is absent, so probe.
+unpack_deb() {
+  local deb="$1" dest="$2"
+  mkdir -p "$dest"
+  local member=""
+  for candidate in data.tar.xz data.tar.gz data.tar.zst; do
+    if ar t "$deb" 2>/dev/null | grep -qx "$candidate"; then
+      member="$candidate"
+      break
+    fi
+  done
+  if [ -z "$member" ]; then
+    echo "ERROR: unsupported .deb payload layout in $(basename "$deb") (no data.tar.{xz,gz,zst})." >&2
     exit 1
   fi
-  echo "  sha256 OK"
-fi
+  ( cd "$dest" && ar x "$deb" "$member" )
+  case "$member" in
+    *.xz) tar -xf "$dest/$member" -C "$dest" ;;
+    *.gz) tar -xzf "$dest/$member" -C "$dest" ;;
+    *.zst)
+      if ! tar --zstd -xf "$dest/$member" -C "$dest" 2>/dev/null; then
+        echo "ERROR: this tar build cannot read zstd .deb payloads; use a newer tar." >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
 
-# .deb = ar archive of cpio-less tarballs; no dpkg-deb needed.
-# Note: GNU ar returns 0 even when the named member is absent, so probe for the file.
-( cd "$WORK" && ar x proot.deb data.tar.xz ) >/dev/null 2>&1 || true
-if [ ! -f "$WORK/data.tar.xz" ]; then
-  ( cd "$WORK" && ar x proot.deb data.tar.gz ) >/dev/null 2>&1 || true
-fi
-if [ -f "$WORK/data.tar.xz" ]; then
-  tar -xf "$WORK/data.tar.xz" -C "$WORK"
-elif [ -f "$WORK/data.tar.gz" ]; then
-  tar -xzf "$WORK/data.tar.gz" -C "$WORK"
-else
-  echo "ERROR: unsupported .deb payload layout." >&2
-  exit 1
-fi
+fetch_deb "$PROOT_DEB_URL"  "$WORK/proot.deb"  "$PROOT_DEB_SHA256"
+fetch_deb "$TALLOC_DEB_URL" "$WORK/talloc.deb" "$TALLOC_DEB_SHA256"
+fetch_deb "$SHMEM_DEB_URL"  "$WORK/shmem.deb"  "$SHMEM_DEB_SHA256"
 
-USR_DIR="$(find "$WORK" -type d -path '*/files/usr' | head -n1)"
-PREFIX="${USR_DIR:-$WORK/data/data/com.termux/files/usr}"
+unpack_deb "$WORK/proot.deb"  "$WORK/proot"
+unpack_deb "$WORK/talloc.deb" "$WORK/talloc"
+unpack_deb "$WORK/shmem.deb"  "$WORK/shmem"
 
+# Termux data.tar layout: ./data/data/com.termux/files/usr/{bin,lib,libexec}.
+# `-print -quit` yields at most one line, so no pipe needed (and no SIGPIPE race).
+termux_prefix() {
+  local root="$1"
+  find "$root" -type d -path '*/files/usr' -print -quit
+}
+PPREFIX="$(termux_prefix "$WORK/proot")"
+TPREFIX="$(termux_prefix "$WORK/talloc")"
+SPREFIX="$(termux_prefix "$WORK/shmem")"
+
+# ---- staging ----------------------------------------------------------------------
 # Stage first: only copy into the payload directory once everything validated.
 copy_engine() {
-  local name="$1" src="$2"
+  local name="$1" src="$2" required="${3:-0}"
   if [ ! -f "$src" ]; then
-    echo "WARNING: $name not found in package ($src) — skipping." >&2
+    if [ "$required" = "1" ]; then
+      echo "ERROR: required payload $name not found at $src — the .deb layout changed?" >&2
+      echo "       Re-check the Termux package version/paths or update this script." >&2
+      exit 1
+    fi
+    echo "WARNING: optional payload $name not found at $src — skipping." >&2
     return 0
   fi
   mkdir -p "$STAGE"
-  cp "$src" "$STAGE/$name"
+  cp -L "$src" "$STAGE/$name"
   chmod 0755 "$STAGE/$name"
   echo "  + $name ($(wc -c < "$STAGE/$name") bytes)"
 }
 
-echo "Extracting engine payload from the .deb ..."
-copy_engine "$OUT_PROOT"    "$PREFIX/bin/proot"
-copy_engine "$OUT_LOADER"   "$PREFIX/libexec/proot/loader"
-copy_engine "$OUT_LOADER32" "$PREFIX/libexec/proot/loader32"
-copy_engine "$OUT_TALLOC"   "$PREFIX/lib/libtalloc.so.2"
-copy_engine "$OUT_SHMEM"    "$PREFIX/lib/libandroid-shmem.so"
+# libtalloc ships as lib/libtalloc.so.2 (a symlink to the versioned real file);
+# cp -L dereferences it. Fall back to the first real libtalloc.so* if the layout moves.
+# Only probe the dir when it exists — find on a missing dir prints its own error and
+# would mask copy_engine's clear required-file diagnostic.
+TALLOC_SRC="$TPREFIX/lib/libtalloc.so.2"
+if [ ! -e "$TALLOC_SRC" ] && [ -d "$TPREFIX/lib" ]; then
+  TALLOC_SRC="$(find "$TPREFIX/lib" -maxdepth 1 -type f -name 'libtalloc.so*' -print -quit)"
+fi
+
+echo "Extracting engine payload from the .debs ..."
+copy_engine "$OUT_PROOT"    "$PPREFIX/bin/proot"            1
+copy_engine "$OUT_LOADER"   "$PPREFIX/libexec/proot/loader" 1
+copy_engine "$OUT_LOADER32" "$PPREFIX/libexec/proot/loader32" 0
+copy_engine "$OUT_TALLOC"   "$TALLOC_SRC"                   1
+copy_engine "$OUT_SHMEM"    "$SPREFIX/lib/libandroid-shmem.so" 1
 
 # ---- ELF name fixups ----------------------------------------------------------
 # libtalloc ships as libtalloc.so.2 with SONAME "libtalloc.so.2", and proot's
@@ -142,31 +222,37 @@ if [ -d "$STAGE" ]; then
   done
 fi
 
-# Sanity checks: real ELF, correct machine.
-proot_file="$STAGE/$OUT_PROOT"
-if [ ! -f "$proot_file" ]; then
-  echo "ERROR: proot was not extracted. Check the .deb path/version." >&2
-  exit 1
-fi
-magic="$(od -An -tx1 -N4 "$proot_file" | tr -d ' \n')"
-if [ "$magic" != "7f454c46" ]; then
-  echo "ERROR: $proot_file is not an ELF (magic $magic). Refusing to ship it." >&2
-  exit 1
-fi
-# `od -tu2` prints host byte order; parse little-endian explicitly for portability.
-machine_hex="$(od -An -tx1 -j18 -N2 "$proot_file" | tr -d ' \n')"
-machine=$(( 0x${machine_hex:2:2}${machine_hex:0:2} ))
+# ---- sanity checks ----------------------------------------------------------------
+# Real ELF, correct machine, for every staged file (the two .so deps included — a
+# silently corrupt dependency breaks the guest exactly like a corrupt proot).
+is_elf() {
+  [ -f "$1" ] && [ "$(od -An -tx1 -N4 "$1" | tr -d ' \n')" = "7f454c46" ]
+}
+
+elf_machine() {
+  local hex="$(od -An -tx1 -j18 -N2 "$1" | tr -d ' \n')"
+  echo $(( 0x${hex:2:2}${hex:0:2} ))
+}
+
 case "$ABI" in
   arm64-v8a)      want_machine=183 ;;
   armeabi-v7a)    want_machine=40 ;;
   x86_64)         want_machine=62 ;;
   x86)            want_machine=3 ;;
-  *) echo "ERROR: unknown ABI $ABI" >&2; exit 1 ;;
 esac
-if [ "$machine" != "$want_machine" ]; then
-  echo "ERROR: proot e_machine=$machine does not match $ABI ($want_machine)." >&2
-  exit 1
-fi
+
+for name in "$OUT_PROOT" "$OUT_LOADER" "$OUT_TALLOC" "$OUT_SHMEM"; do
+  file="$STAGE/$name"
+  if ! is_elf "$file"; then
+    echo "ERROR: staged $name is not an ELF — refusing to ship it." >&2
+    exit 1
+  fi
+  machine="$(elf_machine "$file")"
+  if [ "$machine" != "$want_machine" ]; then
+    echo "ERROR: staged $name e_machine=$machine does not match $ABI ($want_machine)." >&2
+    exit 1
+  fi
+done
 
 # Every staged name must survive Android's installer filter, or the file ships in the
 # APK and never reaches the device. Catch that here rather than on a user's phone.
@@ -195,6 +281,17 @@ fi
 mkdir -p "$TARGET_DIR"
 cp -f "$STAGE"/* "$TARGET_DIR/"
 chmod 0755 "$TARGET_DIR"/*
+
+# Final gate: the APK is only complete with ALL FOUR required files. (The pre-fix
+# script warned-and-skipped missing deps and still exited 0 — never again.)
+missing=0
+for name in "$OUT_PROOT" "$OUT_LOADER" "$OUT_TALLOC" "$OUT_SHMEM"; do
+  if [ ! -f "$TARGET_DIR/$name" ]; then
+    echo "ERROR: $TARGET_DIR/$name is still missing after staging." >&2
+    missing=1
+  fi
+done
+[ "$missing" -eq 0 ] || exit 1
 
 echo "Done. Engine payload for $ABI:"
 ls -la "$TARGET_DIR"

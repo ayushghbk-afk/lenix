@@ -107,14 +107,25 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 Extraction is real (streaming, hardened, pure-JVM) and manifests are signature-checked.
 The PRoot command line, PTY/pipe terminal and loopback RFB viewer are in the app; a
-device still needs the PRoot binary (plus its static loader) under
+device still needs the PRoot engine payload under
 `app/src/main/jniLibs/arm64-v8a/` before START can spawn a guest — run
 `./scripts/fetch-engine.sh` to bundle the official Termux PRoot build. The payload is
-staged as `libproot.so` / `libprootloader.so` / `libtalloc.so`: Android only extracts
-`lib*.so` entries from an APK's `lib/<abi>/` on release builds, so anything else is
-packaged and then silently discarded (ADR-022). The Gradle build runs the script for
-you when the payload is missing — pass `-PskipEngineFetch=true` to build without it. zstd layers wait
-on `libpvmnative`; the pinned upstream layer is `tar.xz`.
+staged as `libproot.so` / `libprootloader.so` / `libprootloader32.so` (optional) /
+`libtalloc.so` / `libandroid-shmem.so`. The last two come from **separate Termux
+packages** (`libtalloc`, `libandroid-shmem`) — proot only declares them as
+dependencies, so `fetch-engine.sh` downloads all three `.deb`s; without them the app
+reports *"payload is present but its shared library dependencies are missing"* and
+refuses to start the guest. Android only extracts `lib*.so` entries from an APK's
+`lib/<abi>/` on release builds, so anything else is packaged and then silently
+discarded (ADR-022). The Gradle build runs the fetch script for you when the payload
+is incomplete — pass `-PskipEngineFetch=true` to build without it. Check the staged
+payload with `./scripts/verify-payload.sh` and the built APK with
+`./scripts/verify-apk-engine.sh app/build/outputs/apk/debug` (both fail hard in CI).
+zstd layers wait on `libpvmnative`; the pinned upstream layer is `tar.xz`.
+
+If a device reports missing engine dependencies after a rebuild: uninstall the app
+first — `adb install -r` / Play updates can leave an older install's extracted
+native payload behind — then install the fresh APK.
 
 ## Runtime model
 

@@ -1,7 +1,13 @@
-# PocketVM — Architecture & Project Structure
+# Lenix — Architecture & Project Structure
 
-**Document status:** design (Phase 0). Version 1.0. Product codename: PocketVM
-(repo: `lenix`).
+> **Document status: historical design record, superseded by the implementation.**
+> Written at Phase 0 under the codename "PocketVM" and kept as the design rationale
+> for the current code. The project has since shipped **Phases 1–7** (Compose UI,
+> instance manager, resumable RootFS downloader, signed manifests, streaming
+> extraction, PRoot engine + terminal, Openbox desktop + VNC) — see the README for
+> the current state and `docs/DECISIONS.md` for the ADRs that supersede the open
+> questions below. Package/class names in this document may predate the rename to
+> `com.lenix`; the source tree is authoritative where they differ.
 
 ---
 
@@ -477,15 +483,18 @@ Toolchain: AGP 9.x (built-in Kotlin), Compose, NDK r27, CMake 3.22+, cargo-ndk
 
 ## 13. Roadmap (mapped from the product brief)
 
-| Phase | Deliverables | Exit criteria |
-|---|---|---|
-| **0 — Foundation** | repo scaffold, dep vendoring (`fetch-deps.sh`), CI skeleton, first native binary (`pvmextract`) builds | `native.yml` green; `pvmextract` unit-tested on a sample archive |
-| **1 — MVP shell** | distro catalog + install (Alpine first), PRoot launch, pty terminal, instance store | `adb`-driven: install Alpine → `uname -a` inside app terminal |
-| **2 — Desktop** | `desktop` layer (Xvnc + openbox), RFB client (Raw/Hextile first, Tight second), SurfaceView renderer | Ubuntu + openbox desktop usable *inside* the app |
-| **3 — Mobile UX** | touch toolbar, gestures, clipboard, resolution settings, landscape | 5-min scripted session without hardware keyboard |
-| **4 — VM manager** | clone, backup/restore (SAF), storage management, multi-instance | clone + restore round-trip |
-| **5 — Advanced** | snapshots, FGS persistence, file sharing, audio (pulseaudio), SSH server (opt-in), windows/edge-to-edge polish | documented push-notification-free background run |
-| **Full VM (later)** | `/dev/kvm`-based QEMU path for devices where root/KVM is available; same UI, different backend | device-lab demo |
+Status as of 2026-08: Phases 0–2 are done and shipped in the app (README, Phases
+1–7 of the implementation roadmap); Phase 3 is in progress; 4–5 are not started.
+
+| Phase | Deliverables | Exit criteria | Status |
+|---|---|---|---|
+| **0 — Foundation** | repo scaffold, dep vendoring (`fetch-deps.sh`), CI skeleton, first native binary (`pvmextract`) builds | `native.yml` green; `pvmextract` unit-tested on a sample archive | done (repackaged as implementation Phases 1–5) |
+| **1 — MVP shell** | distro catalog + install (Alpine first), PRoot launch, pty terminal, instance store | `adb`-driven: install Alpine → `uname -a` inside app terminal | done (implementation Phases 6, engine + terminal) |
+| **2 — Desktop** | `desktop` layer (Xvnc + openbox), RFB client (Raw/Hextile first, Tight second), SurfaceView renderer | Ubuntu + openbox desktop usable *inside* the app | done (implementation Phase 7, Openbox + VNC) |
+| **3 — Mobile UX** | touch toolbar, gestures, clipboard, resolution settings, landscape | 5-min scripted session without hardware keyboard | in progress |
+| **4 — VM manager** | clone, backup/restore (SAF), storage management, multi-instance | clone + restore round-trip | not started |
+| **5 — Advanced** | snapshots, FGS persistence, file sharing, audio (pulseaudio), SSH server (opt-in), windows/edge-to-edge polish | documented push-notification-free background run | not started |
+| **Full VM (later)** | `/dev/kvm`-based QEMU path for devices where root/KVM is available; same UI, different backend | device-lab demo | not started |
 
 ## 14. Open questions (decide before Phase 1 code)
 
