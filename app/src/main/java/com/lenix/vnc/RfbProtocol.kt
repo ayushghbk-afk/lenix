@@ -69,6 +69,61 @@ object RfbProtocol {
         out.flush()
     }
 
+    /**
+     * RFB `PIXEL_FORMAT` (16 bytes on the wire).
+     */
+    data class PixelFormat(
+        val bitsPerPixel: Int,
+        val depth: Int,
+        val bigEndian: Boolean,
+        val trueColour: Boolean,
+        val redMax: Int,
+        val greenMax: Int,
+        val blueMax: Int,
+        val redShift: Int,
+        val greenShift: Int,
+        val blueShift: Int,
+    )
+
+    /**
+     * The one format [decodeRawBgra] can decode: 32 bpp, depth 24, little-endian
+     * true colour with red at bit 16 — i.e. `B,G,R,pad` byte order in the stream.
+     *
+     * The client *must* pin this with [writeSetPixelFormat]; a server is free to
+     * keep serving its own native format (16 bpp, big-endian, …) otherwise.
+     */
+    val BGRX_8888 = PixelFormat(
+        bitsPerPixel = 32,
+        depth = 24,
+        bigEndian = false,
+        trueColour = true,
+        redMax = 255,
+        greenMax = 255,
+        blueMax = 255,
+        redShift = 16,
+        greenShift = 8,
+        blueShift = 0,
+    )
+
+    fun writeSetPixelFormat(out: OutputStream, format: PixelFormat = BGRX_8888) {
+        val buf = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
+        buf.put(CLIENT_SET_PIXEL_FORMAT.toByte())
+        buf.put(ByteArray(3)) // padding
+        buf.put(format.bitsPerPixel.toByte())
+        buf.put(format.depth.toByte())
+        buf.put(if (format.bigEndian) 1.toByte() else 0.toByte())
+        buf.put(if (format.trueColour) 1.toByte() else 0.toByte())
+        buf.putShort(format.redMax.toShort())
+        buf.putShort(format.greenMax.toShort())
+        buf.putShort(format.blueMax.toShort())
+        buf.put(format.redShift.toByte())
+        buf.put(format.greenShift.toByte())
+        buf.put(format.blueShift.toByte())
+        buf.put(ByteArray(3)) // padding
+        out.write(buf.array())
+        out.flush()
+    }
+
     data class ServerInit(
         val width: Int,
         val height: Int,
@@ -193,18 +248,35 @@ object RfbProtocol {
     }
 
     /**
-     * Decodes a Raw rectangle of 32-bpp little-endian BGRA into ARGB ints.
+     * Decodes a Raw rectangle of 32-bpp little-endian `B,G,R,pad` pixels into
+     * opaque ARGB ints.
+     *
+     * The fourth byte of each pixel is RFB *padding*, not alpha: with `depth 24`
+     * TigerVNC leaves it at 0. Using it as the alpha channel produced a fully
+     * transparent framebuffer (the desktop rendered as a blank surface), so alpha
+     * is forced opaque here. Rows/columns outside `pixels` are skipped instead of
+     * throwing, so a rogue rectangle cannot crash the viewer.
      */
     fun decodeRawBgra(pixels: IntArray, stride: Int, rect: Rect, bytes: ByteArray) {
-        var src = 0
+        if (stride <= 0 || rect.width <= 0 || rect.height <= 0) return
+        val required = rect.width * rect.height * 4
+        require(bytes.size >= required) {
+            "Raw rect ${rect.width}x${rect.height} needs $required bytes, got ${bytes.size}"
+        }
+        val rows = pixels.size / stride
         for (row in 0 until rect.height) {
-            var dst = (rect.y + row) * stride + rect.x
+            val y = rect.y + row
+            var src = row * rect.width * 4
+            if (y < 0 || y >= rows) continue
+            var dst = y * stride + rect.x
             for (col in 0 until rect.width) {
-                val b = bytes[src].toInt() and 0xff
-                val g = bytes[src + 1].toInt() and 0xff
-                val r = bytes[src + 2].toInt() and 0xff
-                val a = bytes[src + 3].toInt() and 0xff
-                pixels[dst] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                val x = rect.x + col
+                if (x in 0 until stride) {
+                    val b = bytes[src].toInt() and 0xff
+                    val g = bytes[src + 1].toInt() and 0xff
+                    val r = bytes[src + 2].toInt() and 0xff
+                    pixels[dst] = (0xff shl 24) or (r shl 16) or (g shl 8) or b
+                }
                 src += 4
                 dst++
             }
