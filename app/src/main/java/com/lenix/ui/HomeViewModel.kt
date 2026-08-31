@@ -25,7 +25,7 @@ import com.lenix.vm.VmManager
 import com.lenix.vm.VmState
 import com.lenix.vm.isBusy
 import com.lenix.vm.launch.GuestRuntime
-import com.lenix.vm.launch.GuestSession
+import com.lenix.vm.pty.TerminalSnapshot
 import com.lenix.vm.service.VmRuntimeService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -125,6 +125,19 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = mutableHomeState.asStateFlow()
 
     private var installJob: Job? = null
+
+    /**
+     * The terminal window's state. Owned here rather than by the screen: the reader
+     * lives as long as the guest session, so navigating away from the terminal neither
+     * loses the transcript nor leaves the guest's stdout pipe unread (which would
+     * block the shell once 64 KiB of output piled up).
+     */
+    private val mutableTerminal = MutableStateFlow(TerminalSnapshot.disconnected(TERMINAL_IDLE))
+
+    /** The terminal window's transcript, or why no shell is attached to it. */
+    val terminalState: StateFlow<TerminalSnapshot> = mutableTerminal.asStateFlow()
+
+    private var terminalJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -351,6 +364,7 @@ class HomeViewModel(
                 }
 
                 guestRuntime.start(id, desktop = desktop)
+                attachTerminal(id)
                 if (background) {
                     withContext(Dispatchers.Main) {
                         VmRuntimeService.start(getApplication())
@@ -371,8 +385,10 @@ class HomeViewModel(
                     )
                 }
             } catch (e: VmException) {
+                detachTerminal(TERMINAL_IDLE)
                 message(e.message ?: "Could not start the Linux environment.")
             } catch (e: Exception) {
+                detachTerminal(TERMINAL_IDLE)
                 vmManager.markError(id, VmError.NATIVE_ENGINE_FAILED)
                 message(e.message ?: "Could not start the Linux environment.")
             }
@@ -388,6 +404,8 @@ class HomeViewModel(
             } catch (_: Exception) {
                 vmManager.markStopped(id)
             }
+            // Always detach: a failed stop still means the window has no live shell.
+            detachTerminal(TERMINAL_STOPPED)
             withContext(Dispatchers.Main) {
                 VmRuntimeService.stop(getApplication())
             }
@@ -395,8 +413,48 @@ class HomeViewModel(
         }
     }
 
-    fun guestSession(): GuestSession? =
-        guestRuntime.session(mutableHomeState.value.selectedInstance.id)
+    /**
+     * Types one line into the running guest shell. Writes happen off the main thread:
+     * a guest that is not draining its stdin would otherwise block the caller.
+     */
+    fun sendToTerminal(line: String) {
+        val terminal = guestRuntime.terminal(mutableHomeState.value.selectedInstance.id)
+        if (terminal == null) {
+            detachTerminal(TERMINAL_IDLE)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) { terminal.send(line) }
+    }
+
+    /** Closes the guest's stdin — the only end-of-input a pipe-backed shell honors. */
+    fun sendEofToTerminal() {
+        val terminal = guestRuntime.terminal(mutableHomeState.value.selectedInstance.id) ?: return
+        viewModelScope.launch(Dispatchers.IO) { terminal.sendEof() }
+    }
+
+    /** Clears the terminal window's scrollback; the guest session is untouched. */
+    fun clearTerminal() {
+        guestRuntime.terminal(mutableHomeState.value.selectedInstance.id)?.clear()
+    }
+
+    /** Mirrors the running session's terminal into [terminalState] until it is replaced. */
+    private fun attachTerminal(id: String) {
+        terminalJob?.cancel()
+        val terminal = guestRuntime.terminal(id)
+        if (terminal == null) {
+            mutableTerminal.value = TerminalSnapshot.disconnected(TERMINAL_IDLE)
+            return
+        }
+        terminalJob = viewModelScope.launch {
+            terminal.snapshot.collect { snapshot -> mutableTerminal.value = snapshot }
+        }
+    }
+
+    private fun detachTerminal(notice: String) {
+        terminalJob?.cancel()
+        terminalJob = null
+        mutableTerminal.value = TerminalSnapshot.disconnected(notice)
+    }
 
     fun consumeNavigation() {
         mutableHomeState.update { state -> state.copy(navigateTo = null) }
@@ -671,6 +729,14 @@ class HomeViewModel(
         const val EXTRACTING_START = 0.85f
         const val EXTRACTING_END = 0.96f
         const val COMMITTING_FRACTION = 0.98f
+
+        /** Shown by the terminal window while no guest session exists. */
+        const val TERMINAL_IDLE =
+            "No guest shell is attached.\nPress START on Home so PRoot can spawn /bin/bash, " +
+                "then reopen Terminal."
+
+        /** Shown after the guest was stopped on purpose. */
+        const val TERMINAL_STOPPED = "Guest stopped. Press START on Home to launch the shell again."
 
         const val EXTRACTION_HEADROOM_NUMERATOR = 6L
         const val EXTRACTION_HEADROOM_DENOMINATOR = 5L

@@ -4,12 +4,18 @@ import com.lenix.nativebridge.NativeSetup
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
 import com.lenix.vm.VmManager
+import com.lenix.vm.pty.PtySession
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Owns live guest sessions for the manager: start (PRoot + optional desktop),
  * stop with SIGTERM→SIGKILL, and the PTY/pipe handle the terminal reads.
+ *
+ * Each running session also owns exactly one [PtySession] reader for as long as the
+ * guest lives — not just while the terminal screen is composed. Two reasons: the
+ * guest's stdout is a pipe, so an unread 64 KiB buffer blocks the shell, and the
+ * transcript must survive navigating away from the terminal window and back.
  *
  * @param nativeLibDir signed APK native payload dir (`ApplicationInfo.nativeLibraryDir`)
  *   — the only place Android 10+ allows `execve` of the engine (ADR-021).
@@ -25,13 +31,22 @@ class GuestRuntime(
 ) {
     private val sessions = ConcurrentHashMap<String, GuestSession>()
 
+    /** One terminal reader per running guest session, closed when the guest stops. */
+    private val terminals = ConcurrentHashMap<String, PtySession>()
+
     fun session(id: String): GuestSession? = sessions[id]
+
+    /** The terminal attached to [id]'s guest session, or null when it is not running. */
+    fun terminal(id: String): PtySession? = terminals[id]
 
     fun isEngineAvailable(): Boolean = engine.isAvailable(filesDir, abi, nativeLibDir)
 
     fun start(id: String, desktop: Boolean, geometry: String = ProotCommandBuilder.DEFAULT_GEOMETRY): GuestSession {
-        sessions[id]?.stop(1_000)
-        sessions.remove(id)
+        // A restart has to go through the real stop path: killing the old process behind
+        // the manager's back leaves the instance RUNNING, and RUNNING -> STARTING is an
+        // illegal transition (VmStateMachine), so the restart would throw. It also has to
+        // detach the old session's terminal.
+        if (sessions.containsKey(id)) stop(id)
         val instance = manager.getInstance(id)
             ?: throw VmException(VmError.UNKNOWN, "Unknown instance '$id'.")
         val root = instanceRoot(id)
@@ -89,14 +104,25 @@ class GuestRuntime(
             )
         }
         sessions[id] = session
+        // Attach the reader before handing the session out: from here on the guest's
+        // stdout always has a consumer, in shell mode and in desktop mode alike.
+        terminals[id] = PtySession(session).start()
         manager.markRunning(id, session.toVmProcess(id))
         return session
     }
 
     fun stop(id: String) {
         manager.stop(id)
-        sessions.remove(id)?.stop()
+        val session = sessions.remove(id)
+        // Detach the window first so the shutdown output cannot race a "shell exited"
+        // notice into a session the user stopped on purpose.
+        closeTerminal(id)
+        session?.stop()
         manager.markStopped(id)
+    }
+
+    private fun closeTerminal(id: String) {
+        terminals.remove(id)?.close()
     }
 
     fun instanceRoot(id: String): File = File(filesDir, "instances/$id")

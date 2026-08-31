@@ -81,8 +81,14 @@ fun LenixApp() {
             InstallScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.TERMINAL) {
+            // Collected here, not inside the screen, so the window recomposes when a
+            // session starts, exits or is stopped while the terminal is open.
+            val terminal by homeViewModel.terminalState.collectAsState()
             TerminalScreen(
-                session = homeViewModel.guestSession(),
+                snapshot = terminal,
+                onSend = homeViewModel::sendToTerminal,
+                onEndOfInput = homeViewModel::sendEofToTerminal,
+                onClear = homeViewModel::clearTerminal,
                 onBack = { navController.popBackStack() },
                 onHome = { navController.popBackStack(Routes.HOME, inclusive = false) },
             )
