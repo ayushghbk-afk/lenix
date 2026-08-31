@@ -350,6 +350,12 @@ START. Tight/JPEG is a later encoding behind the same client.
 **Consequences:** The protocol is JVM-tested with a scripted server. A Debian layer
 without Xvnc/Openbox will retry then surface `VNC_CONNECTION_FAILED` instead of hanging.
 
+**Amendment (fix):** the client now sends `SetPixelFormat` (32 bpp, depth 24,
+little-endian, true colour, shifts 16/8/0) right after `ServerInit`, before
+`SetEncodings`. The Raw decoder hard-assumes that layout, and the 4th byte of each
+pixel is RFB *padding* — not alpha — so decoded pixels are forced opaque. Reading it
+as alpha yielded a fully transparent (blank) framebuffer against `Xvnc -depth 24`.
+
 ## ADR-021 — Engine exec: signed APK native payload, not filesDir (accepted)
 
 **Context:** On-device START failed with `Cannot run program

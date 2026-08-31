@@ -2,6 +2,7 @@ package com.lenix.vnc
 
 import com.lenix.vm.VmError
 import com.lenix.vm.VmException
+import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
@@ -18,7 +19,7 @@ class RfbClient(
         socket.tcpNoDelay = true
         socket.getInputStream() to socket.getOutputStream()
     },
-) {
+) : Closeable {
     lateinit var server: RfbProtocol.ServerInit
         private set
 
@@ -54,6 +55,10 @@ class RfbClient(
             RfbProtocol.writeClientInit(output, shared = true)
             server = RfbProtocol.readServerInit(input)
             pixels = IntArray(server.width * server.height)
+            // Pin the wire format the Raw decoder understands (ARCHITECTURE.md §8.2
+            // "PixelFormat negotiation"). Without this the server keeps serving its
+            // native format and decodeRawBgra reinterprets it as 32-bpp BGRX.
+            RfbProtocol.writeSetPixelFormat(output, RfbProtocol.BGRX_8888)
             RfbProtocol.writeSetEncodings(output)
             RfbProtocol.writeFramebufferUpdateRequest(
                 output,
@@ -64,10 +69,21 @@ class RfbClient(
                 height = server.height,
             )
         } catch (e: VmException) {
+            close()
             throw e
         } catch (e: Exception) {
+            close()
             throw VmException(VmError.VNC_CONNECTION_FAILED, e.message, e)
         }
+    }
+
+    /**
+     * Releases the loopback socket. A failed handshake used to leave the socket
+     * dangling, so the viewer's retry loop leaked one connection per attempt.
+     */
+    override fun close() {
+        if (::input.isInitialized) runCatching { input.close() }
+        if (::output.isInitialized) runCatching { output.close() }
     }
 
     fun requestUpdate(incremental: Boolean = true) {

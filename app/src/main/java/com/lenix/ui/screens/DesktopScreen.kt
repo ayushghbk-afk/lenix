@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.lenix.vnc.RfbClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
@@ -64,20 +65,36 @@ fun DesktopScreen(
         }
         var lastError = "Connecting to 127.0.0.1:$vncPort"
         status = lastError
-        repeat(20) { attempt ->
-            try {
-                val rfb = RfbClient(port = vncPort)
-                withContext(Dispatchers.IO) { rfb.handshake() }
-                connected = true
-                status = "Openbox • ${rfb.server.width}×${rfb.server.height} • 127.0.0.1:$vncPort (RFB 3.8)"
-                return@LaunchedEffect
-            } catch (e: Exception) {
-                lastError = e.message ?: "VNC connection failed"
-                status = "Retry ${attempt + 1}/20 — $lastError"
-                delay(500)
+        var session: RfbClient? = null
+        try {
+            var attempt = 0
+            while (session == null && attempt < 20) {
+                val client = RfbClient(port = vncPort)
+                try {
+                    withContext(Dispatchers.IO) { client.handshake() }
+                    session = client
+                    connected = true
+                    status =
+                        "Openbox • ${client.server.width}×${client.server.height} • 127.0.0.1:$vncPort (RFB 3.8)"
+                } catch (e: Exception) {
+                    // handshake() closes on failure; close again so a partial
+                    // connect can never leak a socket per retry.
+                    client.close()
+                    attempt++
+                    lastError = e.message ?: "VNC connection failed"
+                    status = "Retry $attempt/20 — $lastError"
+                    delay(500)
+                }
             }
+            if (session == null) {
+                status = lastError
+            } else {
+                // Hold the RFB session open while the screen is on top.
+                awaitCancellation()
+            }
+        } finally {
+            session?.close()
         }
-        status = lastError
     }
 
     Scaffold(

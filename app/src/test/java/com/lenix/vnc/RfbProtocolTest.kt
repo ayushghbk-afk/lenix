@@ -56,18 +56,57 @@ class RfbProtocolTest {
     }
 
     @Test
-    fun `decodeRawBgra writes ARGB`() {
+    fun `decodeRawBgra writes opaque ARGB and ignores the RFB padding byte`() {
         val pixels = IntArray(4)
+        // 4th byte of each pixel is RFB padding (0 with depth 24), never alpha.
         val bytes = byteArrayOf(
-            0x11, 0x22, 0x33, 0xFF.toByte(),
-            0x00, 0x00, 0x00, 0x80.toByte(),
-            0x01, 0x02, 0x03, 0x04,
-            0x0A, 0x0B, 0x0C, 0x0D,
+            0x11, 0x22, 0x33, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x03, 0x00,
+            0x0A, 0x0B, 0x0C, 0x00,
         )
         val rect = RfbProtocol.Rect(0, 0, 2, 2, RfbProtocol.ENCODING_RAW)
         RfbProtocol.decodeRawBgra(pixels, 2, rect, bytes)
         assertEquals(0xFF332211.toInt(), pixels[0])
-        assertEquals(0x80000000.toInt(), pixels[1])
+        assertEquals(0xFF000000.toInt(), pixels[1])
+        assertEquals(0xFF030201.toInt(), pixels[2])
+        assertEquals(0xFF0C0B0A.toInt(), pixels[3])
+        // Every pixel must be fully opaque, otherwise the desktop renders blank.
+        assertTrue(pixels.all { (it ushr 24) == 0xFF })
+    }
+
+    @Test
+    fun `decodeRawBgra places a sub-rectangle at its offset`() {
+        val pixels = IntArray(4)
+        val rect = RfbProtocol.Rect(1, 1, 1, 1, RfbProtocol.ENCODING_RAW)
+        RfbProtocol.decodeRawBgra(pixels, 2, rect, byteArrayOf(0x11, 0x22, 0x33, 0x00))
+        assertEquals(0, pixels[0])
+        assertEquals(0xFF332211.toInt(), pixels[3])
+    }
+
+    @Test
+    fun `decodeRawBgra clips rectangles that fall outside the framebuffer`() {
+        val pixels = IntArray(4)
+        val rect = RfbProtocol.Rect(1, 1, 2, 2, RfbProtocol.ENCODING_RAW)
+        RfbProtocol.decodeRawBgra(pixels, 2, rect, ByteArray(2 * 2 * 4) { 0x7F })
+        assertEquals(0xFF7F7F7F.toInt(), pixels[3])
+    }
+
+    @Test
+    fun `setPixelFormat pins 32bpp little-endian BGRX`() {
+        val out = ByteArrayOutputStream()
+        RfbProtocol.writeSetPixelFormat(out)
+        val bytes = out.toByteArray()
+        assertEquals(20, bytes.size)
+        assertEquals(RfbProtocol.CLIENT_SET_PIXEL_FORMAT.toByte(), bytes[0])
+        assertEquals(32.toByte(), bytes[4]) // bits-per-pixel
+        assertEquals(24.toByte(), bytes[5]) // depth
+        assertEquals(0.toByte(), bytes[6]) // big-endian-flag
+        assertEquals(1.toByte(), bytes[7]) // true-colour-flag
+        assertEquals(255, ByteBuffer.wrap(bytes, 8, 2).order(ByteOrder.BIG_ENDIAN).short.toInt())
+        assertEquals(16.toByte(), bytes[14]) // red-shift
+        assertEquals(8.toByte(), bytes[15]) // green-shift
+        assertEquals(0.toByte(), bytes[16]) // blue-shift
     }
 
     @Test
@@ -103,6 +142,17 @@ class RfbProtocolTest {
         client.handshake()
         assertEquals(2, client.server.width)
         assertEquals("X", client.server.name)
-        assertTrue(String(clientWrites.toByteArray()).startsWith("RFB "))
+        val written = clientWrites.toByteArray()
+        assertTrue(String(written).startsWith("RFB "))
+        // ProtocolVersion(12) + security type(1) + ClientInit(1) = 14 bytes, then
+        // SetPixelFormat must be negotiated before SetEncodings (ARCHITECTURE.md 8.2).
+        assertEquals(RfbProtocol.CLIENT_SET_PIXEL_FORMAT.toByte(), written[14])
+        assertEquals(32.toByte(), written[18]) // 32 bpp, the only format we decode
+        assertEquals(0.toByte(), written[20]) // little-endian
+        assertEquals(RfbProtocol.CLIENT_SET_ENCODINGS.toByte(), written[34])
+        assertEquals(
+            RfbProtocol.CLIENT_FRAMEBUFFER_UPDATE_REQUEST.toByte(),
+            written[34 + 8],
+        )
     }
 }
