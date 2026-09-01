@@ -94,6 +94,22 @@ class ProotGuestEngine : GuestEngine {
                 "RootFS is missing at ${request.rootfs.absolutePath}.",
             )
         }
+        // Pre-flight: the rootfs must contain at least one shell binary or PRoot will
+        // fail with a cryptic "'/bin/sh' not found" error.  An empty or half-extracted
+        // rootfs (e.g. after a crash during commit) passes the directory check above
+        // but has nothing PRoot can exec.
+        val shellCandidates = listOf("bin/sh", "bin/bash", "usr/bin/sh", "usr/bin/bash")
+        val hasShell = shellCandidates.any { candidate ->
+            val f = File(request.rootfs, candidate)
+            f.isFile || java.nio.file.Files.isSymbolicLink(f.toPath())
+        }
+        if (!hasShell) {
+            throw VmException(
+                VmError.ROOTFS_EXTRACTION_FAILED,
+                "The RootFS at ${request.rootfs.absolutePath} is empty or missing a shell " +
+                    "(/bin/sh, /bin/bash). Install or reinstall the RootFS from the Home screen.",
+            )
+        }
         request.home.mkdirs()
         request.shared.mkdirs()
 
