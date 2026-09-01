@@ -223,7 +223,9 @@ class RootfsInstallerTest {
                 TarFixtures.Entry(name = "debian-aarch64/", directory = true),
                 TarFixtures.Entry(name = "debian-aarch64/etc/debian_version", bytes = "bookworm\n".toByteArray()),
                 TarFixtures.Entry(name = "debian-aarch64/usr/bin/dash", bytes = "dash".toByteArray(), mode = 0b111101101),
-                TarFixtures.Entry(name = "debian-aarch64/bin/sh", symlinkTo = "usr/bin/dash"),
+                // Real proot-distro symlinks are absolute, so they stay valid once the
+                // wrapper directory is lifted up to the rootfs root.
+                TarFixtures.Entry(name = "debian-aarch64/bin/sh", symlinkTo = "/usr/bin/dash"),
             ),
         )
         files["/wrapped.layer"] = wrapped
