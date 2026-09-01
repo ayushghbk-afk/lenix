@@ -8,6 +8,7 @@ import com.lenix.vm.VmState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -17,6 +18,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 class GuestRuntimeTest {
@@ -75,6 +78,61 @@ class GuestRuntimeTest {
     }
 
     @Test
+    fun `a running guest owns a terminal that reads even while the window is closed`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val engine = PipedEngine()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = engine)
+
+        runtime.start(id, desktop = false)
+
+        val terminal = runtime.terminal(id)
+        assertNotNull("a running guest must have a terminal attached", terminal)
+        assertEquals("", terminal!!.snapshot.value.text)
+
+        // Nobody is watching the window; the reader still has to drain the pipe, or the
+        // guest blocks once 64 KiB of output piles up.
+        engine.session.emit("boot noise\n")
+        awaitUntil { terminal.snapshot.value.text.contains("boot noise") }
+
+        runtime.stop(id)
+        assertNull(runtime.terminal(id))
+        assertFalse(terminal.snapshot.value.text.isEmpty())
+    }
+
+    @Test
+    fun `restarting a guest replaces its terminal`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = PipedEngine())
+
+        runtime.start(id, desktop = false)
+        val first = runtime.terminal(id)
+        runtime.start(id, desktop = false)
+        val second = runtime.terminal(id)
+
+        assertNotNull(first)
+        assertNotNull(second)
+        assertTrue("a restart must attach a fresh reader", first !== second)
+        runtime.stop(id)
+    }
+
+    private fun awaitUntil(timeoutMs: Long = 5_000L, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        throw AssertionError("condition was still false after ${timeoutMs}ms")
+    }
+
+    @Test
     fun `vnc password is 12 hex chars`() {
         val pw = VncPassword.generate()
         assertEquals(12, pw.length)
@@ -101,6 +159,34 @@ class GuestRuntimeTest {
         override fun launch(request: LaunchRequest): GuestSession {
             last = request
             return FakeSession(request.vncPort)
+        }
+    }
+
+    private class PipedEngine : GuestEngine {
+        val session = PipedSession()
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
+        override fun launch(request: LaunchRequest): GuestSession = session
+    }
+
+    /** A guest whose stdout the test writes to, like a shell printing while we look away. */
+    private class PipedSession : GuestSession {
+        private val alive = AtomicBoolean(true)
+        private val writer = PipedOutputStream()
+        override val pid: Long = 31337
+        override val stdin: OutputStream = ByteArrayOutputStream()
+        override val stdout: InputStream = PipedInputStream(writer)
+        override val vncPort: Int? = null
+
+        fun emit(text: String) {
+            writer.write(text.toByteArray())
+            writer.flush()
+        }
+
+        override fun isAlive(): Boolean = alive.get()
+
+        override fun stop(graceMs: Long) {
+            alive.set(false)
+            writer.close()
         }
     }
 

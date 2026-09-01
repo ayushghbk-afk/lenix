@@ -526,3 +526,64 @@ deliberate).
 ---
 
 *Open items from `ARCHITECTURE.md` §14 are tracked here as they resolve.*
+
+---
+
+## ADR-024 — Terminal window: session-owned transcript, VT-lite rendering, honest line mode (accepted)
+
+**Context:** The terminal screen (ADR-009's pipe-backed fallback) was unusable in five
+independent ways, all visible on a real device:
+
+1. **The screen owned the reader.** `TerminalScreen` built its own
+   `remember(session) { PtySession(it, scope) }` on a `rememberCoroutineScope()`, so
+   navigating away disposed the only reader of the guest's stdout. Output produced while
+   the window was closed was lost, and once the 64 KiB pipe filled the shell itself
+   blocked. Coming back built a fresh session with an empty buffer, so the scrollback
+   vanished on every navigation.
+2. **Control traffic was rendered as text.** `Text(output)` printed the raw byte stream:
+   every `\r` frame of an `apt` progress bar, `ESC [ … m` colour codes and `ESC [ K`
+   erases appeared literally, and a shorter redraw left the previous frame's tail behind.
+3. **Nothing was echoed.** The guest's stdio is a pipe, not a PTY, so bash reads whole
+   lines without readline: it never echoes what it is given, and it prints no prompt
+   either (`PS1` belongs to interactive shells). The window showed command output with no
+   command line and no prompt anywhere.
+4. **Input and scrolling misbehaved.** `send()` wrote to a closed pipe from a UI
+   coroutine (uncaught `IOException` once the guest exited);
+   `LaunchedEffect(output) { scroll.animateScrollTo(scroll.maxValue) }` read `maxValue`
+   before the new text was measured, so it always stopped one chunk short, and it yanked
+   the reader back to the bottom on every chunk. The title bar read `session?.isAlive()`
+   during composition, which observes nothing.
+5. **A restart could not restart.** `GuestRuntime.start()` killed the previous process
+   but left the instance `RUNNING`, so `manager.start()` died on
+   `Illegal VmState transition: RUNNING -> STARTING` and leaked the old terminal.
+
+**Decision:**
+
+- **One `PtySession` per guest session, owned by `GuestRuntime`** — attached before the
+  session is handed out, detached in `stop()` — mirrored into
+  `HomeViewModel.terminalState: StateFlow<TerminalSnapshot>`. `TerminalScreen` is a pure
+  view of that snapshot: it can be opened, closed and reopened without touching the
+  guest, and the stdout pipe always has a reader (desktop sessions included).
+- **`TerminalBuffer`** is a pure-JVM screen + scrollback: LF, `\r` overwrite, `\b`, tab
+  stops, `ESC [ K` / `ESC [ J` erases, and every other CSI/OSC/charset sequence dropped.
+  It is bounded (1000 lines × 1000 columns, oldest lines and the tail of over-long lines
+  kept) and caches its rendered string until the next mutation.
+- **Incremental UTF-8 decoding** with the partial trailing sequence carried to the next
+  read, so a multi-byte character split across two reads is not replaced by two `?`.
+- **Local echo** (`"$ " + line`) because a pipe-backed shell cannot echo, and
+  **`END SHELL` closes stdin** — the only end-of-input a pipe-backed bash honors. There is
+  deliberately no `^C` key: with no line discipline a control byte is data, so it would be
+  inserted into the pending command line. The window says what it is
+  (`Line mode: no PTY, so commands run on Send and ^C cannot interrupt`) instead of
+  pretending to be an interactive terminal.
+- **Scrolling follows the tail only while the window is at the bottom**, and waits one
+  frame before reading `maxValue` so the new text is measured first.
+- **A restart goes through `GuestRuntime.stop(id)`**, so the state machine, the process
+  and the terminal all see it.
+
+**Consequences:** The rendering rules are unit-testable without Android: 18 tests for the
+buffer, 9 for the session (including the split multi-byte read and the dead-shell paths)
+and 2 more in `GuestRuntimeTest` for the ownership and restart rules. The reader is a
+daemon thread behind an injectable factory, so no coroutine scope has to be threaded
+through `GuestRuntime`. Moving to a real PTY (`libpvmnative`'s `openpty`) later means
+passing `echoInput = false` and forwarding control bytes — nothing in the UI changes.

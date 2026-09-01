@@ -19,11 +19,17 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
   `execve` it from there — the only app-reachable spot Android 10+ SELinux allows
   (ADR-021; a `filesDir` copy fails with `error=13, Permission denied`);
   `NativeBridge` loads optional `libpvmnative.so` for `openpty` / `killpg`
-- Terminal is a live `PtySession` on the guest stdio (line-mode fallback when no PTY)
+- Terminal window: one `PtySession` per guest session, owned by `GuestRuntime` for as long
+  as the guest runs — so the transcript survives leaving the screen and the guest's stdout
+  always has a reader (a full pipe would block the shell). `TerminalBuffer` applies `\r`
+  redraws and `ESC[K` erases and drops the rest of the ANSI/OSC traffic instead of
+  printing it; input is echoed locally and `END SHELL` closes stdin, because a
+  pipe-backed shell can do neither (ADR-024)
 - Desktop: allocate loopback RFB port 5901–5999, start `Xvnc` + `openbox-session` inside
   the guest, connect with a pure-Kotlin RFB 3.8 client (Raw encoding, tap → pointer)
 - Settings toggles now do what they say: foreground service while running, auto-open Desktop
-- Unit tests for argv, native copy, RFB handshake/decode, and the launch/stop lifecycle
+- Unit tests for argv, native copy, RFB handshake/decode, terminal rendering/session I/O,
+  and the launch/stop lifecycle
 
 **Phases 4 + 5 — Manifest signatures and real RootFS extraction**
 
