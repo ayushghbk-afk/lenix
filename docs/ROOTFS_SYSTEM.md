@@ -84,7 +84,10 @@ the cached file. `[4]` is `installer.extract.RootfsExtractor` — pure JVM
 (ADR-018). It keeps modes/symlinks/mtimes, normalizes ownership to the app uid implicitly,
 drops setuid/setgid, ignores xattrs, skips and counts device nodes/FIFOs, enforces a
 tar-slip-proof path policy, and caps both expansion and entry count against the manifest's
-declared size; progress is bytes written per layer, cancellation is checked per entry. `[6]`
+declared size; progress is bytes written per layer, cancellation is checked per entry. It
+also lifts a single top-level wrapper directory to the root — proot-distro's layer tars the
+build dir by name (`debian-aarch64/`), and without that step every member lands one level
+deep so the instance has nothing at `/` to boot (no `/bin/sh`, no `/etc`). `[6]`
 is the rename in `RootfsInstaller`, which also writes `rootfs.json` (per-layer
 digest/counts/signing key id) and clears the interrupted-install checkpoint. `[5]`
 (post-install guest bootstrap) belongs to the Phase 6 engine and is not run yet. Kill during

@@ -213,6 +213,59 @@ class RootfsInstallerTest {
     private fun readOverlayed(rootfs: File): String = File(rootfs, "etc/debian_version").readText()
 
     @Test
+    fun `a proot-distro wrapped layer is unwrapped so the instance can boot`() {
+        // proot-distro archives the whole filesystem under the build directory's name
+        // (`tar -C $WORKDIR debian-aarch64`), so every member is prefixed with it. Without
+        // the unwrap step the shell lands at debian-aarch64/bin/sh and the instance reports
+        // "empty or missing a shell" instead of booting.
+        val wrapped = TarFixtures.tarXz(
+            listOf(
+                TarFixtures.Entry(name = "debian-aarch64/", directory = true),
+                TarFixtures.Entry(name = "debian-aarch64/etc/debian_version", bytes = "bookworm\n".toByteArray()),
+                TarFixtures.Entry(name = "debian-aarch64/usr/bin/dash", bytes = "dash".toByteArray(), mode = 0b111101101),
+                // Real proot-distro symlinks are absolute, so they stay valid once the
+                // wrapper directory is lifted up to the rootfs root.
+                TarFixtures.Entry(name = "debian-aarch64/bin/sh", symlinkTo = "/usr/bin/dash"),
+            ),
+        )
+        files["/wrapped.layer"] = wrapped
+        val manifest = RootfsManifestSigner.sign(
+            """
+            {
+              "schemaVersion": 1,
+              "id": "debian-bookworm-aarch64",
+              "distro": "debian",
+              "codename": "bookworm",
+              "arch": "aarch64",
+              "version": "0.1.0",
+              "channel": "stable",
+              "releasedAt": "2026-08-30T00:00:00Z",
+              "layers": [
+                ${layerJson("base", "/wrapped.layer", wrapped, "xz")}
+              ],
+              "install": { "estimatedFreeGb": 0.3, "bootCommand": "/bin/bash" },
+              "signature": "unsigned:placeholder"
+            }
+            """.trimIndent(),
+            releaseKey.first,
+            releaseKey.second.keyId,
+        )
+        val filesDir = tmp.newFolder("files")
+
+        val progress = runBlocking { installer(filesDir).install(instanceId, manifest).toList() }
+        assertEquals(RootfsInstaller.Progress.Ready, progress.last())
+
+        val rootfs = File(instanceDir(filesDir), "rootfs")
+        // The wrapper directory is gone and the guest filesystem sits at the root, where the
+        // launch-time shell check (GuestEngine) expects it.
+        assertFalse(File(rootfs, "debian-aarch64").exists())
+        assertTrue(File(rootfs, "etc/debian_version").isFile)
+        assertTrue(File(rootfs, "bin/sh").exists())
+        assertTrue(File(rootfs, "usr/bin/dash").canExecute())
+        assertTrue(java.nio.file.Files.isSymbolicLink(File(rootfs, "bin/sh").toPath()))
+    }
+
+    @Test
     fun `a retry reuses cached layers and resumes the interrupted one in place`() {
         val filesDir = tmp.newFolder("files")
 
