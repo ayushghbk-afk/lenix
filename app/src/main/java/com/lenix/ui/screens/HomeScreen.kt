@@ -360,6 +360,10 @@ private fun VmCard(
                             VmError.INSUFFICIENT_STORAGE ->
                                 "Not enough free space to extract the RootFS. Free some " +
                                     "space, then retry — the download is already cached."
+                            VmError.ROOTFS_EXTRACTION_FAILED ->
+                                state.message?.takeIf { it.isNotBlank() }
+                                    ?: ("The RootFS is empty or corrupted. Reset the instance " +
+                                        "and reinstall from the Home screen.")
                             else -> "Error: ${error.name}"
                         },
                         style = MaterialTheme.typography.bodyMedium,
