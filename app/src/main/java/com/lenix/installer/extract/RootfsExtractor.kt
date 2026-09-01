@@ -66,6 +66,10 @@ data class ExtractionReport(
  *    staging tree with write errors;
  *  * **special files are skipped** — character/block devices, FIFOs and sockets are counted
  *    in [ExtractionReport.skippedSpecial]; `/dev` is bind-mounted from the host at launch;
+ *  * **wrapper directories are lifted** — a layer whose members all sit under one leading
+ *    top-level directory (proot-distro tars the build dir by name) has that wrapper moved
+ *    aside so the guest filesystem lands at the root, otherwise the instance boots with
+ *    nothing at `/` (no `/bin/sh`, no `/etc`);
  *  * **cancellation is honored** — [onProgress] runs in the collector's coroutine, so a
  *    cancelled install stops at the next member and the caller discards the staging
  *    directory. Extraction restarts from scratch by design; the resumable half of an
@@ -161,6 +165,12 @@ class RootfsExtractor(
                 e,
             )
         }
+
+        // A RootFS archive may wrap the whole filesystem in a single top-level directory
+        // (e.g. proot-distro tars the build directory by name), which would otherwise leave
+        // the guest sitting one level deep with nothing at the root. Realize the filesystem
+        // at the root so the instance actually boots.
+        unwrapSingleTopLevelDirectory(root)
 
         if (session.entries == 0) {
             throw VmException(
@@ -471,6 +481,59 @@ class RootfsExtractor(
         if (time > 0L) target.setLastModified(time)
     }
 
+    /**
+     * Lifts a single top-level wrapper directory up to the RootFS root.
+     *
+     * Some upstream archives — notably termux/proot-distro's, which is built with
+     * `tar -C $WORKDIR debian-aarch64` — store the entire filesystem under one leading
+     * directory named after the build tree. Extracted verbatim that leaves every member
+     * one level deep (`debian-aarch64/bin/sh`, …) and nothing at the filesystem root, so
+     * the instance cannot boot (no `/bin/sh`, no `/etc`, …).
+     *
+     * The wrapper is only hoisted when it genuinely *looks like a rootfs*: the archive has
+     * exactly one top-level directory (a real RootFS root has several — `/bin`, `/usr`,
+     * `/etc`, …), and that directory contains at least [ROOTFS_WRAPPER_MIN_MARKERS] of the
+     * standard top-level rootfs directories. A single `etc/` holding a file or two is a
+     * legitimate rootfs entry, not a wrapper, so it is never touched.
+     */
+    private fun unwrapSingleTopLevelDirectory(root: File) {
+        val children = root.listFiles() ?: return
+        if (children.size != 1) return
+        val wrapper = children[0]
+        // A symlink to a directory is not a wrapper: `isDirectory` would follow it and we
+        // must never hoist the contents of something the guest resolves by link.
+        if (!wrapper.isDirectory || Files.isSymbolicLink(wrapper.toPath())) return
+        val nested = wrapper.listFiles() ?: return
+        val markerCount = nested.count {
+            it.isDirectory && it.name in ROOTFS_TOP_LEVEL_DIRS
+        }
+        if (markerCount < ROOTFS_WRAPPER_MIN_MARKERS) return
+        for (child in nested) {
+            val dest = File(root, child.name)
+            if (dest.exists()) {
+                throw VmException(
+                    VmError.ROOTFS_EXTRACTION_FAILED,
+                    "Could not unwrap the layer's top-level directory: $dest already exists.",
+                )
+            }
+            try {
+                Files.move(child.toPath(), dest.toPath())
+            } catch (e: IOException) {
+                throw VmException(
+                    VmError.ROOTFS_EXTRACTION_FAILED,
+                    "Could not lift '${child.name}' out of the layer's top-level directory: " +
+                        "${e.message}",
+                    e,
+                )
+            }
+        }
+        if (!wrapper.delete()) {
+            // The wrapper is empty now; if it cannot be removed the install still succeeds,
+            // leaving a stray directory is cosmetic, not fatal.
+            wrapper.deleteRecursively()
+        }
+    }
+
     private fun guardFreeSpace(root: File, session: Session) {
         val remaining = freeBytes(root)
         if (remaining in 0 until minFreeBytes) {
@@ -552,6 +615,23 @@ class RootfsExtractor(
 
         /** Entries per layer, a guard against pathological archives. */
         const val DEFAULT_MAX_ENTRIES = 2_000_000
+
+        /**
+         * A single top-level directory is only treated as a wrapping rootfs when it holds at
+         * least this many of the standard [ROOTFS_TOP_LEVEL_DIRS]. A lone `etc/`, `usr/` or
+         * `data/` carrying ordinary files is a real rootfs directory, not a wrapper.
+         */
+        const val ROOTFS_WRAPPER_MIN_MARKERS = 2
+
+        /**
+         * The standard directories a Debian-ish RootFS places at its root. A wrapper
+         * directory (proot-distro's `debian-aarch64/`) contains several of these; a plain
+         * top-level directory in a normally-laid-out archive is one of these itself.
+         */
+        private val ROOTFS_TOP_LEVEL_DIRS = setOf(
+            "bin", "sbin", "usr", "lib", "lib64", "etc", "var", "home", "root", "opt",
+            "dev", "proc", "sys", "run", "tmp", "boot", "mnt", "media", "srv",
+        )
 
         /** Linux file names are 255 bytes; longer is a crafted archive. */
         const val MAX_NAME_BYTES = 255

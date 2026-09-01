@@ -308,4 +308,78 @@ class RootfsExtractorTest {
         assertTrue(File(root, "usr/bin/openbox").isFile)
         assertTrue(File(root, "usr/local/bin/lenix-entry").canExecute())
     }
+
+    @Test
+    fun `unwrap a single top-level wrapper directory (proot-distro layout)`() {
+        // proot-distro archives the whole filesystem under the build dir's name
+        // (`tar -C $WORKDIR debian-aarch64`), so every member is prefixed with it. A
+        // real RootFS root always has several top-level entries, so exactly one top-level
+        // directory is the wrapper — the guest must land at the root, not one level deep.
+        val archive = TarFixtures.tar(
+            listOf(
+                Entry(name = "debian-aarch64/", directory = true),
+                Entry(name = "debian-aarch64/bin/", directory = true),
+                Entry(name = "debian-aarch64/bin/sh", bytes = "#!/bin/sh\n".toByteArray(), mode = 0b111101101),
+                Entry(name = "debian-aarch64/etc/os-release", bytes = "ID=debian\n".toByteArray()),
+                Entry(name = "debian-aarch64/usr/bin/dash", bytes = "dash".toByteArray(), mode = 0b111101101),
+                Entry(name = "debian-aarch64/usr/bin/sh-link", symlinkTo = "dash"),
+            ),
+        )
+
+        val (root, report) = extract(archive)
+
+        // The wrapper directory is gone and the filesystem is at the root.
+        assertFalse(File(root, "debian-aarch64").exists())
+        assertTrue(File(root, "bin/sh").canExecute())
+        assertEquals("ID=debian\n", TarFixtures.readText(File(root, "etc/os-release")))
+        assertTrue(File(root, "usr/bin/dash").isFile)
+        assertTrue(Files.isSymbolicLink(File(root, "usr/bin/sh-link").toPath()))
+        assertEquals(
+            "dash",
+            Files.readSymbolicLink(File(root, "usr/bin/sh-link").toPath()).toString(),
+        )
+        assertEquals(3, report.files)
+        assertEquals(2, report.directories)
+        assertEquals(1, report.symlinks)
+    }
+
+    @Test
+    fun `leave a rootfs already laid out at the root untouched`() {
+        // An archive with several top-level entries is not a wrapper and must not move.
+        val archive = TarFixtures.tar(
+            listOf(
+                Entry(name = "bin/", directory = true),
+                Entry(name = "bin/sh", bytes = "#!/bin/sh\n".toByteArray(), mode = 0b111101101),
+                Entry(name = "etc/", directory = true),
+                Entry(name = "etc/hostname", bytes = "lenix\n".toByteArray()),
+            ),
+        )
+
+        val (root, _) = extract(archive)
+
+        assertEquals("lenix\n", TarFixtures.readText(File(root, "etc/hostname")))
+        assertTrue(File(root, "bin/sh").canExecute())
+        assertTrue(File(root, "bin").isDirectory)
+        assertTrue(File(root, "etc").isDirectory)
+    }
+
+    @Test
+    fun `a lone standard top-level directory is not a wrapper`() {
+        // A real rootfs directory that happens to be the archive's only top-level entry
+        // (e.g. an archive of just /etc) must stay where it is — it is not a proot-distro
+        // wrapper. Its name is a standard rootfs dir and it holds no nested rootfs dirs.
+        val archive = TarFixtures.tar(
+            listOf(
+                Entry(name = "etc/", directory = true),
+                Entry(name = "etc/hostname", bytes = "lenix\n".toByteArray()),
+            ),
+        )
+
+        val (root, _) = extract(archive)
+
+        assertEquals("lenix\n", TarFixtures.readText(File(root, "etc/hostname")))
+        assertTrue(File(root, "etc").isDirectory)
+        assertFalse(File(root, "hostname").exists())
+    }
 }
+
