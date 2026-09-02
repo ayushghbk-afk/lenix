@@ -70,7 +70,8 @@ class GuestRuntime(
         val shellCandidates = listOf("bin/sh", "bin/bash", "usr/bin/sh", "usr/bin/bash")
         for (candidate in shellCandidates) {
             val f = File(rootfs, candidate)
-            Log.d("Lenix", "  $candidate: ${if (f.isFile || f.isSymbolicLink()) "EXISTS" else "MISSING"}")
+            val exists = f.isFile || java.nio.file.Files.isSymbolicLink(f.toPath())
+            Log.d("Lenix", "  $candidate: ${if (exists) "EXISTS" else "MISSING"}")
         }
 
         val vncPort = if (desktop) portAllocator() else null

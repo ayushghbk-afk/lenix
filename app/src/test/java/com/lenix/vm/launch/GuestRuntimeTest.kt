@@ -218,9 +218,19 @@ class GuestRuntimeTest {
     }
 
     private class PipedEngine : GuestEngine {
-        val session = PipedSession()
+        /** The session created by the most recent [launch]; tests drive its stdout. */
+        lateinit var session: PipedSession
+            private set
+
         override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
-        override fun launch(request: LaunchRequest): GuestSession = session
+
+        // Every launch exec's a fresh shell: the previous session's pipes were closed by
+        // stop(), and GuestRuntime.waitForShellReady() needs a live process that prints
+        // the ready marker — exactly what ProotCommandBuilder.shell arranges on-device.
+        override fun launch(request: LaunchRequest): GuestSession {
+            session = PipedSession()
+            return session
+        }
     }
 
     /** A guest whose stdout the test writes to, like a shell printing while we look away. */
@@ -231,6 +241,15 @@ class GuestRuntimeTest {
         override val stdin: OutputStream = ByteArrayOutputStream()
         override val stdout: InputStream = PipedInputStream(writer)
         override val vncPort: Int? = null
+
+        init {
+            // Signal readiness like the real guest shell does before handing over the
+            // prompt, so GuestRuntime.waitForShellReady() lets the start complete.
+            // The marker bytes are consumed by waitForShellReady() itself — the terminal
+            // reader only attaches afterwards, so the window still starts empty.
+            writer.write("__LENIX_READY__\n".toByteArray())
+            writer.flush()
+        }
 
         fun emit(text: String) {
             writer.write(text.toByteArray())

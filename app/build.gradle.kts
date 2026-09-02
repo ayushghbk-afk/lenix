@@ -60,6 +60,13 @@ android {
         }
     }
 
+    testOptions {
+        // GuestRuntime (and friends) use android.util.Log for diagnostics; in JVM unit
+        // tests the android.jar stubs throw "not mocked" unless default return values
+        // are enabled.
+        unitTests.isReturnDefaultValues = true
+    }
+
     lint {
         abortOnError = false
         warningsAsErrors = false
