@@ -36,7 +36,50 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee gradle-test.log
+          status=$?
+          if [ $status -ne 0 ]; then
+            {
+              echo "## Unit test step failed"
+              echo ""
+              echo "### JUnit failures (from test-results XML)"
+              echo '```'
+              python3 - <<'PYEOF'
+          import glob, xml.etree.ElementTree as ET
+          shown = 0
+          for path in sorted(glob.glob("app/build/test-results/**/*.xml", recursive=True)):
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception:
+                  continue
+              for case in root.iter("testcase"):
+                  failure = case.find("failure")
+                  if failure is None:
+                      failure = case.find("error")
+                  if failure is None:
+                      continue
+                  shown += 1
+                  print(f"FAILED: {case.get('classname')}.{case.get('name')}")
+                  message = (failure.get("message") or "").strip()
+                  if message:
+                      print(f"  message: {message[:600]}")
+                  for line in (failure.text or "").strip().splitlines()[:25]:
+                      print(f"  {line}")
+                  print()
+          if shown == 0:
+              print("(no failing testcase found in JUnit XML - likely a compile error)")
+          PYEOF
+              echo '```'
+              echo ""
+              echo "### Gradle log tail"
+              echo '```'
+              tail -n 120 gradle-test.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
