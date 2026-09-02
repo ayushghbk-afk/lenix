@@ -24,28 +24,29 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.lenix.vm.launch.GuestRuntime
 import com.lenix.vnc.RfbClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-/**
- * Built-in RFB viewer for the Openbox session (Phase 7 / ADR-003).
- *
- * Handshake runs on a background dispatcher; the framebuffer renderer is the
- * next polish pass. Until Xvnc answers, a status card explains why.
- */
+/** Built-in RFB viewer for the Openbox session (Phase 7 / ADR-003).
+
+  * Handshake runs on a background dispatcher; the framebuffer renderer is the
+  * next polish pass. Until Xvnc answers, a status card explains why.
+  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DesktopScreen(
+    guestRuntime: GuestRuntime,
+    instanceId: String,
     vncPort: Int?,
     running: Boolean,
     onBack: () -> Unit,
@@ -53,7 +54,7 @@ fun DesktopScreen(
     var status by remember { mutableStateOf("Waiting for Openbox / Xvnc …") }
     var connected by remember { mutableStateOf(false) }
 
-    LaunchedEffect(vncPort, running) {
+    LaunchedEffect(vncPort, running, instanceId) {
         connected = false
         if (!running || vncPort == null) {
             status = if (!running) {
@@ -63,12 +64,28 @@ fun DesktopScreen(
             }
             return@LaunchedEffect
         }
+
+        // Verify the guest session is still alive before attempting connection
+        val guestSession = guestRuntime.session(instanceId)
+        if (guestSession == null || !guestSession.isAlive()) {
+            status = "Guest session is not running. Press START on Home to launch it."
+            return@LaunchedEffect
+        }
+
         var lastError = "Connecting to 127.0.0.1:$vncPort"
         status = lastError
         var session: RfbClient? = null
         try {
             var attempt = 0
             while (session == null && attempt < 20) {
+                // Re-check guest is alive during each retry — the session may have
+                // died while we were waiting for Xvnc to start.
+                val currentSession = guestRuntime.session(instanceId)
+                if (currentSession == null || !currentSession.isAlive()) {
+                    status = "Guest session died — press START on Home to launch it again."
+                    return@LaunchedEffect
+                }
+
                 val client = RfbClient(port = vncPort)
                 try {
                     withContext(Dispatchers.IO) { client.handshake() }

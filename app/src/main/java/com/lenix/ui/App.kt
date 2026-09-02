@@ -95,6 +95,8 @@ fun LenixApp() {
         }
         composable(Routes.DESKTOP) {
             DesktopScreen(
+                guestRuntime = homeViewModel.guestRuntime,
+                instanceId = homeUiState.selectedInstance.id,
                 vncPort = homeViewModel.vncPort(),
                 running = homeUiState.selectedInstance.state == com.lenix.vm.VmState.RUNNING,
                 onBack = { navController.popBackStack() },

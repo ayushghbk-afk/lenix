@@ -28,8 +28,11 @@ class ProotCommandBuilderTest {
         assertTrue(argv.contains(rootfs.absolutePath))
         assertTrue(argv.any { it.startsWith(home.absolutePath) && it.endsWith(":/root") })
         assertTrue(argv.any { it.contains("resolv.conf") })
-        assertEquals("/bin/bash", argv[argv.lastIndex - 1])
-        assertEquals("-l", argv.last())
+        // Shell now uses /bin/sh -c with a ready signal for the host to detect
+        assertTrue(argv.any { it.contains("/bin/sh") })
+        assertTrue(argv.any { it.contains("-c") })
+        assertTrue(argv.any { it.contains("__LENIX_READY__") })
+        assertTrue(argv.any { it.contains("exec /bin/bash") })
     }
 
     @Test
