@@ -185,7 +185,7 @@ class GuestRuntimeTest {
         installReady(manager)
         val id = manager.selectedInstance().id
         // A base Debian image: a shell, but no VNC server and no window manager.
-        File(files, "instances/$id/rootfs/usr/bin").mkdirs()
+        File(files, "instances/$id/rootfs/bin").mkdirs()
         File(files, "instances/$id/rootfs/bin/sh").writeText("")
         val runtime = GuestRuntime(filesDir = files, manager = manager, engine = RecordingEngine())
 

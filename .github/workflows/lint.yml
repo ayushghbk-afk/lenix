@@ -41,6 +41,24 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
 
+      - name: Show failing unit tests
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for report in app/build/test-results/testDebugUnitTest/*.xml; do
+            grep -q "<failure\|<error" "$report" || continue
+            echo "=== $report"
+            cat "$report"
+          done
+
+      - name: Upload unit test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
+
       - name: Upload lint report
         uses: actions/upload-artifact@v4
         with:
