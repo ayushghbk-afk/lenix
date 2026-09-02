@@ -36,10 +36,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run unit tests
+        shell: bash
         run: |
+          set +e
           set -o pipefail
           ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee gradle-test.log
           status=$?
+          set -e
           if [ $status -ne 0 ]; then
             python3 - <<'PYEOF'
           import glob, xml.etree.ElementTree as ET
@@ -72,6 +75,17 @@ jobs:
           PYEOF
           fi
           exit $status
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-failure-diagnostics
+          path: |
+            gradle-test.log
+            app/build/test-results/
+            app/build/reports/tests/
+          if-no-files-found: ignore
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
