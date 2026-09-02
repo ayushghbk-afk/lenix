@@ -96,7 +96,11 @@ class HomeViewModel(
         manifestVerifier = manifestVerifier,
         extractor = RootfsExtractor(freeBytes = { freeBytesOn(application.filesDir) }),
     ),
-    private val guestRuntime: GuestRuntime = GuestRuntime(
+    /**
+     * The guest runtime that manages PRoot engine lifecycle and shell sessions.
+     * Made internal (not private) so DesktopScreen can access it for VNC connection handling.
+     */
+    internal val guestRuntime: GuestRuntime = GuestRuntime(
         filesDir = application.filesDir,
         manager = vmManager,
         nativeLibDir = enginePayloadDir(application),
