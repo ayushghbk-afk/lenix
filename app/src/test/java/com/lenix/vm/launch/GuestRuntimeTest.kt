@@ -16,6 +16,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
@@ -123,13 +124,58 @@ class GuestRuntimeTest {
         runtime.stop(id)
     }
 
-    private fun awaitUntil(timeoutMs: Long = 5_000L, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (condition()) return
-            Thread.sleep(10)
+    @Test
+    fun `shell startup waits for __LENIX_READY__ signal`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val engine = ShellReadyEngine()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = engine)
+
+        // Should succeed - shell emits ready signal
+        val session = runtime.start(id, desktop = false)
+        assertNotNull(session)
+        assertEquals(VmState.RUNNING, manager.getInstance(id)?.state)
+        runtime.stop(id)
+    }
+
+    @Test
+    fun `shell startup fails without ready signal`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val engine = NoReadySignalEngine()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = engine)
+
+        try {
+            runtime.start(id, desktop = false)
+            throw AssertionError("expected VmException")
+        } catch (e: VmException) {
+            assertEquals(VmError.ROOTFS_EXTRACTION_FAILED, e.error)
         }
-        throw AssertionError("condition was still false after ${timeoutMs}ms")
+        assertEquals(VmState.ERROR, manager.getInstance(id)?.state)
+    }
+
+    @Test
+    fun `shell startup fails when process dies before ready`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val engine = DiesBeforeReadyEngine()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = engine)
+
+        try {
+            runtime.start(id, desktop = false)
+            throw AssertionError("expected VmException")
+        } catch (e: VmException) {
+            assertEquals(VmError.ROOTFS_EXTRACTION_FAILED, e.error)
+        }
     }
 
     @Test
@@ -137,6 +183,15 @@ class GuestRuntimeTest {
         val pw = VncPassword.generate()
         assertEquals(12, pw.length)
         assertTrue(pw.matches(Regex("[0-9a-f]{12}")))
+    }
+
+    private fun awaitUntil(timeoutMs: Long = 5_000L, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        throw AssertionError("condition was still false after ${timeoutMs}ms")
     }
 
     private fun installReady(manager: VmManager) {
@@ -197,5 +252,105 @@ class GuestRuntimeTest {
         override val stdout: InputStream = ByteArrayInputStream(ByteArray(0))
         override fun isAlive(): Boolean = alive.get()
         override fun stop(graceMs: Long) { alive.set(false) }
+    }
+
+    /** Emits __LENIX_READY__ on stdout then stays alive — simulates a working shell. */
+    private class ShellReadyEngine : GuestEngine {
+        val session = ShellReadySession()
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
+        override fun launch(request: LaunchRequest): GuestSession = session
+    }
+
+    private class ShellReadySession : GuestSession {
+        private val alive = AtomicBoolean(true)
+        private val writer = PipedOutputStream()
+        override val pid: Long = 31337
+        override val stdin: OutputStream = ByteArrayOutputStream()
+        override val stdout: InputStream = PipedInputStream(writer)
+        override val vncPort: Int? = null
+
+        init {
+            // Simulate shell emitting ready signal
+            Thread {
+                try {
+                    writer.write("__LENIX_READY__\n".toByteArray())
+                    writer.flush()
+                    // Keep alive for a bit
+                    Thread.sleep(5000)
+                } catch (e: Exception) {
+                    // ignore
+                }
+            }.start()
+        }
+
+        override fun isAlive(): Boolean = alive.get()
+
+        override fun stop(graceMs: Long) {
+            alive.set(false)
+            writer.close()
+        }
+    }
+
+    /** Emits other output but never __LENIX_READY__ — simulates a broken shell. */
+    private class NoReadySignalEngine : GuestEngine {
+        val session = NoReadySignalSession()
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
+        override fun launch(request: LaunchRequest): GuestSession = session
+    }
+
+    private class NoReadySignalSession : GuestSession {
+        private val alive = AtomicBoolean(true)
+        private val writer = PipedOutputStream()
+        override val pid: Long = 31337
+        override val stdin: OutputStream = ByteArrayOutputStream()
+        override val stdout: InputStream = PipedInputStream(writer)
+        override val vncPort: Int? = null
+
+        init {
+            Thread {
+                try {
+                    writer.write("some boot noise\n".toByteArray())
+                    writer.flush()
+                    Thread.sleep(5000)
+                } catch (e: Exception) {
+                    // ignore
+                }
+            }.start()
+        }
+
+        override fun isAlive(): Boolean = alive.get()
+
+        override fun stop(graceMs: Long) {
+            alive.set(false)
+            writer.close()
+        }
+    }
+
+    /** Dies immediately without emitting ready — simulates shell crash. */
+    private class DiesBeforeReadyEngine : GuestEngine {
+        val session = DiesBeforeReadySession()
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
+        override fun launch(request: LaunchRequest): GuestSession = session
+    }
+
+    private class DiesBeforeReadySession : GuestSession {
+        private val alive = AtomicBoolean(true)
+        override val pid: Long = 31337
+        override val stdin: OutputStream = ByteArrayOutputStream()
+        override val stdout: InputStream = ByteArrayInputStream(ByteArray(0))
+        override val vncPort: Int? = null
+
+        init {
+            // Process dies immediately
+            Thread {
+                alive.set(false)
+            }.start()
+        }
+
+        override fun isAlive(): Boolean = alive.get()
+
+        override fun stop(graceMs: Long) {
+            alive.set(false)
+        }
     }
 }
