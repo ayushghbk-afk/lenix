@@ -16,6 +16,27 @@ object ProotCommandBuilder {
     const val DEFAULT_VNC_DISPLAY = 1
     const val DISPLAY_BASE_PORT = 5900
 
+    /**
+     * Out-of-band markers the guest scripts print so the host can tell "started" from
+     * "died in the first half second" without parsing distro-specific error text.
+     *
+     * They are stripped from the terminal transcript ([com.lenix.vm.pty.MarkerFilter]);
+     * every one of them starts with [MARKER_PREFIX] so that filter stays a one-liner.
+     */
+    const val MARKER_PREFIX = "__LENIX_"
+
+    /** The guest shell exec'd successfully. */
+    const val MARKER_READY = "__LENIX_READY__"
+
+    /** Xvnc is listening and the window manager is about to start. */
+    const val MARKER_DESKTOP_READY = "__LENIX_DESKTOP_READY__"
+
+    /** The VNC server was found but exited immediately; its log follows. */
+    const val MARKER_XVNC_FAILED = "__LENIX_XVNC_FAILED__"
+
+    /** The guest has no VNC server / window manager installed; the fix follows. */
+    const val MARKER_DESKTOP_MISSING = "__LENIX_DESKTOP_MISSING__"
+
     fun shell(
         proot: File,
         rootfs: File,
@@ -27,10 +48,20 @@ object ProotCommandBuilder {
         "/bin/sh", "-c",
         // Signal the host that the shell started successfully, then exec bash.
         // The host waits for __LENIX_READY__ before marking the instance RUNNING
-        // (see GuestRuntime.waitForShellReady).
-        "echo __LENIX_READY__ >&2; exec /bin/bash -l 2>&1",
+        // (see GuestRuntime.awaitStartup).
+        "echo $MARKER_READY >&2; exec /bin/bash -l 2>&1",
     )
 
+    /**
+     * The desktop launcher.
+     *
+     * It resolves the VNC server and the window manager with `command -v` instead of
+     * assuming `Xvnc` and `openbox-session` exist: the bundled Debian RootFS is a base
+     * image, and tigervnc installs its server as `Xtigervnc` with `Xvnc` as a symlink
+     * only on some releases. When nothing is installed the script prints
+     * [MARKER_DESKTOP_MISSING] plus the apt line that fixes it and exits, so the host can
+     * turn a dead session into an instruction (see `GuestRuntime.start`).
+     */
     fun desktop(
         proot: File,
         rootfs: File,
@@ -43,21 +74,40 @@ object ProotCommandBuilder {
         tini: File? = null,
     ): List<String> {
         val display = displayFor(vncPort)
-        val session = desktopSession(desktop)
+        val servers = DesktopPackages.VNC_SERVERS.joinToString(" ")
+        val managers = DesktopPackages.windowManagers(desktop).joinToString(" ")
+        val installHint = DesktopPackages.installCommand(desktop)
         val inner = listOf(
             "/bin/sh", "-c",
             buildString {
                 append("export DISPLAY=:$display; ")
                 append("export HOME=/root; ")
                 append("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; ")
-                append("echo __XVNEC_STARTING__ >&2; ")
-                append("Xvnc :$display -localhost -geometry $geometry -depth 24 ")
+                append("mkdir -p /tmp /run 2>/dev/null; ")
+                // Resolve what is actually installed instead of assuming Xvnc/openbox.
+                append("VNCBIN=; ")
+                append("for candidate in $servers; do ")
+                append("  if command -v \"\$candidate\" >/dev/null 2>&1; then VNCBIN=\$candidate; break; fi; ")
+                append("done; ")
+                append("WMBIN=; ")
+                append("for candidate in $managers; do ")
+                append("  if command -v \"\$candidate\" >/dev/null 2>&1; then WMBIN=\$candidate; break; fi; ")
+                append("done; ")
+                append("if [ -z \"\$VNCBIN\" ] || [ -z \"\$WMBIN\" ]; then ")
+                append("  echo $MARKER_DESKTOP_MISSING >&2; ")
+                append("  [ -z \"\$VNCBIN\" ] && echo \"missing: VNC server ($servers)\" >&2; ")
+                append("  [ -z \"\$WMBIN\" ] && echo \"missing: window manager ($managers)\" >&2; ")
+                append("  echo \"install it with: $installHint\" >&2; ")
+                append("  exit 1; ")
+                append("fi; ")
+                append("echo \"starting \$VNCBIN on :$display\" >&2; ")
+                append("\"\$VNCBIN\" :$display -localhost -geometry $geometry -depth 24 ")
                 append("-rfbport $vncPort -SecurityTypes None >/tmp/xvnc.log 2>&1 & ")
                 append("XVNCPID=\$!; ")
                 append("echo \$XVNCPID > /tmp/xvnc.pid; ")
-                append("sleep 0.5; ")
+                append("sleep 1; ")
                 append("if ! kill -0 \$XVNCPID 2>/dev/null; then ")
-                append("  echo __XVNEC_FAILED__ >&2; ")
+                append("  echo $MARKER_XVNC_FAILED >&2; ")
                 append("  cat /tmp/xvnc.log >&2; ")
                 append("  exit 1; ")
                 append("fi; ")
@@ -68,8 +118,8 @@ object ProotCommandBuilder {
                 append("  if python3 -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',$vncPort)); s.close()\" 2>/dev/null; then break; fi; ")
                 append("  sleep 0.4; ")
                 append("done; ")
-                append("echo __DESKTOP_READY__ >&2; ")
-                append("$session >/tmp/session.log 2>&1 & ")
+                append("echo $MARKER_DESKTOP_READY >&2; ")
+                append("\"\$WMBIN\" >/tmp/session.log 2>&1 & ")
                 append("touch /run/pvm-ready 2>/dev/null || true; ")
                 append("wait")
             },
@@ -87,11 +137,9 @@ object ProotCommandBuilder {
         return if (display in 1..99) display else DEFAULT_VNC_DISPLAY
     }
 
-    fun desktopSession(desktop: String): String = when (desktop.lowercase()) {
-        "lxqt" -> "lxqt-session"
-        "xfce", "xfce4" -> "xfce4-session"
-        else -> "openbox-session"
-    }
+    /** The preferred session binary for a desktop flavour (the guest falls back). */
+    fun desktopSession(desktop: String): String =
+        DesktopPackages.windowManagers(desktop).first()
 
     /** Environment for the PRoot host process (ADR-021).
 

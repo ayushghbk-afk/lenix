@@ -22,6 +22,13 @@ enum class VmError {
     UNSUPPORTED_ARCHITECTURE,
     NATIVE_ENGINE_FAILED,
     PROCESS_CRASHED,
+
+    /**
+     * The RootFS has no VNC server / window manager installed, so the desktop cannot
+     * start. Not a crash and not a corrupt install: the base image simply needs
+     * `apt-get install` (see [com.lenix.vm.launch.DesktopPackages]).
+     */
+    DESKTOP_NOT_INSTALLED,
     VNC_CONNECTION_FAILED,
     UNKNOWN,
 }
@@ -39,6 +46,9 @@ private fun VmError.defaultMessage(): String = when (this) {
     VmError.UNSUPPORTED_ARCHITECTURE -> "This device architecture is not supported yet."
     VmError.NATIVE_ENGINE_FAILED -> "The native Lenix engine failed to start."
     VmError.PROCESS_CRASHED -> "The Linux process exited unexpectedly."
+    VmError.DESKTOP_NOT_INSTALLED ->
+        "This RootFS has no desktop installed yet. Install a VNC server and a window " +
+            "manager from the terminal, then start the desktop again."
     VmError.VNC_CONNECTION_FAILED -> "The built-in desktop viewer could not connect."
     VmError.UNKNOWN -> "An unexpected Lenix error occurred."
 }

@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.sp
 import com.lenix.ui.HomeUiState
 import com.lenix.vm.VmError
 import com.lenix.vm.VmState
+import com.lenix.vm.launch.DesktopPackages
+import com.lenix.vm.launch.ProotCommandBuilder
 
 /**
  * Lenix home screen. Shows the Linux environment manager with an explicit
@@ -352,8 +354,15 @@ private fun VmCard(
                                     ?: ("The PRoot engine payload is missing from this build. " +
                                         "Run scripts/fetch-engine.sh, rebuild, then tap AUTOFIX " +
                                         "ENGINE to re-check.")
+                            VmError.DESKTOP_NOT_INSTALLED ->
+                                state.message?.takeIf { it.isNotBlank() }
+                                    ?: ("This RootFS has no desktop yet. Start the shell and " +
+                                        "run: " + DesktopPackages.installCommand(
+                                            ProotCommandBuilder.DEFAULT_DESKTOP,
+                                        ))
                             VmError.VNC_CONNECTION_FAILED ->
-                                "The built-in viewer could not reach Xvnc on loopback."
+                                state.message?.takeIf { it.isNotBlank() }
+                                    ?: "The built-in viewer could not reach Xvnc on loopback."
                             VmError.CHECKSUM_FAILED ->
                                 "A downloaded layer did not hash to the digest the signed " +
                                     "manifest pins, so it was discarded. Retry the install."

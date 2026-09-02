@@ -587,3 +587,60 @@ and 2 more in `GuestRuntimeTest` for the ownership and restart rules. The reader
 daemon thread behind an injectable factory, so no coroutine scope has to be threaded
 through `GuestRuntime`. Moving to a real PTY (`libpvmnative`'s `openpty`) later means
 passing `echoInput = false` and forwarding control bytes — nothing in the UI changes.
+
+## ADR-025 — Desktop start: check the guest's packages, don't decode "not found" (accepted)
+
+**Context:** Starting the desktop on a freshly installed instance produced a wall of
+noise and no working session:
+
+```
+XVNEC STARTING
+_XVNEC_FAILED
+/bin/sh: 1: Xvnc: not found
+Guest session died — press START on Home to launch it again.
+```
+
+Three separate faults were visible in those four lines:
+
+1. The bundled Debian bookworm RootFS is a **base** image. It has a shell and apt and
+   nothing else — no X server, no VNC server, no window manager. `ProotCommandBuilder`
+   nevertheless exec'd a hard-coded `Xvnc` and `openbox-session`, so the desktop could
+   only ever work on a guest the user had already provisioned by hand.
+2. The failure was reported as a mystery. The desktop path did not wait for any startup
+   marker, so the instance was marked `RUNNING` while its PRoot process was already gone;
+   the viewer then retried a port nothing was listening on and settled on "Guest session
+   died", which names neither the cause nor a fix.
+3. The handshake markers themselves were printed at the user (and two of them were
+   misspelled `__XVNEC_*__`). The terminal window is for the guest's output, not for the
+   host's private protocol.
+
+**Decision:**
+
+- **`DesktopPackages` is the single source of truth** for what a desktop needs: the VNC
+  server binaries (`Xtigervnc`, `Xvnc`, `Xtightvnc`, `Xvnc4`), the session binaries per
+  flavour, the Debian packages that provide them, and the exact `apt-get` line that
+  installs them.
+- **Two gates, both actionable.** `GuestRuntime.start(desktop = true)` refuses up front
+  when the extracted RootFS contains no VNC server / window manager
+  (`VmError.DESKTOP_NOT_INSTALLED`, instance untouched and still `READY`), and the guest
+  script resolves both binaries with `command -v`, printing `__LENIX_DESKTOP_MISSING__`
+  plus the install line when the on-disk check was too optimistic.
+- **START waits for the guest in both modes.** `awaitStartup()` reads the guest's first
+  output until `__LENIX_DESKTOP_READY__` / `__LENIX_READY__`, a failure marker, or the
+  process dies; failure markers get a short grace period so the Xvnc log ends up in the
+  message. Nothing is marked `RUNNING` on the strength of a process that has already
+  exited, and every byte consumed while waiting is seeded into the terminal transcript
+  (`PtySession.prime`) instead of being swallowed.
+- **A missing desktop starts the shell instead.** `HomeViewModel.start()` catches
+  `DESKTOP_NOT_INSTALLED`, launches the same instance in shell mode and routes to the
+  Terminal with the `apt-get` line as the message — the user lands where the fix is typed.
+- **Markers never reach the window.** They all share the `__LENIX_` prefix and
+  `MarkerFilter` strips them from the transcript, including a token split across two
+  reads, while keeping the human-readable text the guest printed around them.
+
+**Consequences:** A base install now says "run `apt-get update && apt-get install -y
+tigervnc-standalone-server dbus-x11 openbox xterm`" and drops the user in a shell to do
+it, instead of showing a dead session. Guests that already have tigervnc work whichever
+name the server binary carries. The cost is a startup wait of up to 12 s before the
+desktop is called RUNNING (it returns as soon as the marker arrives, typically ~2 s), and
+one more error category to render.

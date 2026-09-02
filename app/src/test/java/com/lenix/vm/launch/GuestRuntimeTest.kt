@@ -54,7 +54,7 @@ class GuestRuntimeTest {
         val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
         installReady(manager)
         val id = manager.selectedInstance().id
-        File(files, "instances/$id/rootfs").mkdirs()
+        installDesktop(File(files, "instances/$id/rootfs"))
         val engine = RecordingEngine()
         val runtime = GuestRuntime(
             filesDir = files,
@@ -179,6 +179,78 @@ class GuestRuntimeTest {
     }
 
     @Test
+    fun `desktop start on a base rootfs asks for the packages instead of dying`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        // A base Debian image: a shell, but no VNC server and no window manager.
+        File(files, "instances/$id/rootfs/usr/bin").mkdirs()
+        File(files, "instances/$id/rootfs/bin/sh").writeText("")
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = RecordingEngine())
+
+        try {
+            runtime.start(id, desktop = true)
+            throw AssertionError("expected VmException")
+        } catch (e: VmException) {
+            assertEquals(VmError.DESKTOP_NOT_INSTALLED, e.error)
+            assertTrue(e.message!!.contains("apt-get install -y tigervnc-standalone-server"))
+        }
+        // Nothing was launched, so the instance is still installed and startable.
+        assertEquals(VmState.READY, manager.getInstance(id)?.state)
+        assertNull(runtime.session(id))
+    }
+
+    @Test
+    fun `desktop start reports the guest's own missing-package marker`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        // Binaries are present on disk but the guest still refuses (e.g. a dangling
+        // symlink): the marker on stdout has to be believed too.
+        installDesktop(File(files, "instances/$id/rootfs"))
+        val engine = ScriptedEngine(
+            ProotCommandBuilder.MARKER_DESKTOP_MISSING + "\nmissing: VNC server\n",
+        )
+        val runtime = GuestRuntime(
+            filesDir = files,
+            manager = manager,
+            engine = engine,
+            desktopReadyTimeoutMs = 2_000L,
+        )
+
+        try {
+            runtime.start(id, desktop = true)
+            throw AssertionError("expected VmException")
+        } catch (e: VmException) {
+            assertEquals(VmError.DESKTOP_NOT_INSTALLED, e.error)
+            assertTrue(e.message!!.contains("missing: VNC server"))
+        }
+        assertEquals(VmState.ERROR, manager.getInstance(id)?.state)
+        assertNull(runtime.session(id))
+    }
+
+    @Test
+    fun `startup markers never reach the terminal transcript`() {
+        val files = tmp.newFolder("files")
+        val manager = VmManager(store = JsonInstanceStore(File(files, "instances")))
+        installReady(manager)
+        val id = manager.selectedInstance().id
+        File(files, "instances/$id/rootfs").mkdirs()
+        val engine = PipedEngine()
+        val runtime = GuestRuntime(filesDir = files, manager = manager, engine = engine)
+
+        runtime.start(id, desktop = false)
+        val terminal = runtime.terminal(id)!!
+        engine.session.emit("__LENIX_DESKTOP_READY__hello\n")
+        awaitUntil { terminal.snapshot.value.text.contains("hello") }
+
+        assertFalse(terminal.snapshot.value.text.contains("__LENIX_"))
+        runtime.stop(id)
+    }
+
+    @Test
     fun `vnc password is 12 hex chars`() {
         val pw = VncPassword.generate()
         assertEquals(12, pw.length)
@@ -192,6 +264,13 @@ class GuestRuntimeTest {
             Thread.sleep(10)
         }
         throw AssertionError("condition was still false after ${timeoutMs}ms")
+    }
+
+    /** A RootFS that has the desktop packages the launcher looks for. */
+    private fun installDesktop(rootfs: File) {
+        File(rootfs, "usr/bin").mkdirs()
+        File(rootfs, "usr/bin/Xtigervnc").writeText("")
+        File(rootfs, "usr/bin/openbox-session").writeText("")
     }
 
     private fun installReady(manager: VmManager) {
@@ -213,8 +292,21 @@ class GuestRuntimeTest {
         override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
         override fun launch(request: LaunchRequest): GuestSession {
             last = request
-            return FakeSession(request.vncPort)
+            // Both launch modes announce themselves on stdout, like the real scripts.
+            val marker = if (request.mode == GuestMode.DESKTOP) {
+                ProotCommandBuilder.MARKER_DESKTOP_READY
+            } else {
+                ProotCommandBuilder.MARKER_READY
+            }
+            return FakeSession(request.vncPort, "$marker\n")
         }
+    }
+
+    /** A guest that prints [output] and then keeps running. */
+    private class ScriptedEngine(private val output: String) : GuestEngine {
+        override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
+        override fun launch(request: LaunchRequest): GuestSession =
+            FakeSession(request.vncPort, output)
     }
 
     private class PipedEngine : GuestEngine {
@@ -225,7 +317,7 @@ class GuestRuntimeTest {
         override fun isAvailable(filesDir: File, abi: String, nativeLibDir: File?) = true
 
         // Every launch exec's a fresh shell: the previous session's pipes were closed by
-        // stop(), and GuestRuntime.waitForShellReady() needs a live process that prints
+        // stop(), and GuestRuntime.awaitStartup() needs a live process that prints
         // the ready marker — exactly what ProotCommandBuilder.shell arranges on-device.
         override fun launch(request: LaunchRequest): GuestSession {
             session = PipedSession()
@@ -244,8 +336,8 @@ class GuestRuntimeTest {
 
         init {
             // Signal readiness like the real guest shell does before handing over the
-            // prompt, so GuestRuntime.waitForShellReady() lets the start complete.
-            // The marker bytes are consumed by waitForShellReady() itself — the terminal
+            // prompt, so GuestRuntime.awaitStartup() lets the start complete.
+            // The marker bytes are consumed by awaitStartup() itself and re-seeded — the
             // reader only attaches afterwards, so the window still starts empty.
             writer.write("__LENIX_READY__\n".toByteArray())
             writer.flush()
@@ -264,11 +356,14 @@ class GuestRuntimeTest {
         }
     }
 
-    private class FakeSession(override val vncPort: Int?) : GuestSession {
+    private class FakeSession(
+        override val vncPort: Int?,
+        output: String = "",
+    ) : GuestSession {
         private val alive = AtomicBoolean(true)
         override val pid: Long = 4242
         override val stdin: OutputStream = ByteArrayOutputStream()
-        override val stdout: InputStream = ByteArrayInputStream(ByteArray(0))
+        override val stdout: InputStream = ByteArrayInputStream(output.toByteArray())
         override fun isAlive(): Boolean = alive.get()
         override fun stop(graceMs: Long) { alive.set(false) }
     }

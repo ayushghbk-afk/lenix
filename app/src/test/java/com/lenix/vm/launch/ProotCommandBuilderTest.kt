@@ -1,6 +1,7 @@
 package com.lenix.vm.launch
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -31,7 +32,7 @@ class ProotCommandBuilderTest {
         // Shell now uses /bin/sh -c with a ready signal for the host to detect
         assertTrue(argv.any { it.contains("/bin/sh") })
         assertTrue(argv.any { it.contains("-c") })
-        assertTrue(argv.any { it.contains("__LENIX_READY__") })
+        assertTrue(argv.any { it.contains(ProotCommandBuilder.MARKER_READY) })
         assertTrue(argv.any { it.contains("exec /bin/bash") })
     }
 
@@ -50,11 +51,46 @@ class ProotCommandBuilderTest {
             desktop = "openbox",
         )
         val script = argv.last()
-        assertTrue(script.contains("Xvnc :1"))
+        assertTrue(script.contains("\"\$VNCBIN\" :1"))
+        assertTrue(script.contains("Xtigervnc"))
+        assertTrue(script.contains("Xvnc"))
         assertTrue(script.contains("-localhost"))
         assertTrue(script.contains("-rfbport 5901"))
         assertTrue(script.contains("openbox-session"))
         assertTrue(script.contains("-geometry 1280x720"))
+    }
+
+    @Test
+    fun `desktop script reports missing packages instead of dying with 'not found'`() {
+        val proot = tmp.newFile("proot")
+        val rootfs = tmp.newFolder("rootfs")
+        val home = tmp.newFolder("home")
+        val shared = tmp.newFolder("shared")
+        val resolv = File(tmp.newFolder("etc"), "resolv.conf")
+
+        val script = ProotCommandBuilder.desktop(
+            proot, rootfs, home, resolv, shared, vncPort = 5901,
+        ).last()
+
+        assertTrue(script.contains("command -v"))
+        assertTrue(script.contains(ProotCommandBuilder.MARKER_DESKTOP_MISSING))
+        assertTrue(script.contains(ProotCommandBuilder.MARKER_DESKTOP_READY))
+        assertTrue(script.contains(ProotCommandBuilder.MARKER_XVNC_FAILED))
+        assertTrue(script.contains("apt-get install -y tigervnc-standalone-server"))
+        // The old typo'd markers must never come back: they leaked into the terminal.
+        assertFalse(script.contains("XVNEC"))
+    }
+
+    @Test
+    fun `desktop markers all share the filtered prefix`() {
+        for (marker in listOf(
+            ProotCommandBuilder.MARKER_READY,
+            ProotCommandBuilder.MARKER_DESKTOP_READY,
+            ProotCommandBuilder.MARKER_DESKTOP_MISSING,
+            ProotCommandBuilder.MARKER_XVNC_FAILED,
+        )) {
+            assertTrue(marker, marker.startsWith(ProotCommandBuilder.MARKER_PREFIX))
+        }
     }
 
     @Test

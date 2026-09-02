@@ -342,6 +342,7 @@ class HomeViewModel(
         val desktop = mutableHomeState.value.settings.autoStartDesktop
         val background = mutableHomeState.value.settings.allowBackground
         viewModelScope.launch(vmDispatcher) {
+            var desktopMissingMessage: String? = null
             try {
                 if (!guestRuntime.isEngineAvailable()) {
                     mutableHomeState.update { current ->
@@ -367,7 +368,19 @@ class HomeViewModel(
                     mutableHomeState.update { current -> current.copy(isEngineAvailable = true) }
                 }
 
-                guestRuntime.start(id, desktop = desktop)
+                val startedDesktop = try {
+                    guestRuntime.start(id, desktop = desktop)
+                    desktop
+                } catch (e: VmException) {
+                    // A base RootFS has no desktop yet. That is a missing `apt-get
+                    // install`, not a broken instance: start the shell the user needs to
+                    // fix it with and say exactly what to type, instead of dropping them
+                    // on a Desktop screen that can only report a dead session.
+                    if (e.error != VmError.DESKTOP_NOT_INSTALLED) throw e
+                    guestRuntime.start(id, desktop = false)
+                    desktopMissingMessage = e.message
+                    false
+                }
                 attachTerminal(id)
                 if (background) {
                     withContext(Dispatchers.Main) {
@@ -375,15 +388,16 @@ class HomeViewModel(
                     }
                 }
                 val dest = when {
-                    desktop -> Routes.DESKTOP
+                    startedDesktop -> Routes.DESKTOP
                     else -> Routes.TERMINAL
                 }
                 mutableHomeState.update { state ->
                     state.copy(
-                        message = if (desktop) {
-                            "Openbox session starting — connecting the built-in VNC viewer."
-                        } else {
-                            "Linux shell is running. Open the terminal to type commands."
+                        message = when {
+                            desktopMissingMessage != null -> desktopMissingMessage
+                            startedDesktop ->
+                                "Openbox session starting — connecting the built-in VNC viewer."
+                            else -> "Linux shell is running. Open the terminal to type commands."
                         },
                         navigateTo = dest,
                     )

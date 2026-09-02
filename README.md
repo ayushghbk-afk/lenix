@@ -9,6 +9,23 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
 
 ## Status
 
+**Desktop startup — a base RootFS now says what to install (ADR-025)**
+
+- The bundled Debian image is a *base* system: no X server, no VNC server, no window
+  manager. Starting the desktop on it used to print `XVNEC STARTING`, `/bin/sh: 1: Xvnc:
+  not found` and end at "Guest session died"
+- START now checks the extracted RootFS for a VNC server and a session binary first
+  (`DesktopPackages`), fails as `DESKTOP_NOT_INSTALLED` with the exact
+  `apt-get install -y tigervnc-standalone-server dbus-x11 openbox xterm` line, **and
+  starts the shell instead** so the user is already where that command is typed
+- The guest script resolves `Xtigervnc` / `Xvnc` / `Xtightvnc` and
+  `openbox-session` / `openbox` with `command -v` rather than assuming one name
+- Both modes wait for a startup marker before an instance is called RUNNING, so a guest
+  that died half a second ago is never reported as running; the guest's own error log is
+  quoted in the failure message
+- The `__LENIX_*` handshake markers (and their old `XVNEC` typos) are filtered out of the
+  terminal transcript — including one split across two reads
+
 **Phases 6 + 7 — PRoot engine, terminal, Openbox + VNC**
 
 - Guest launch is real: `ProotCommandBuilder` + `GuestRuntime` exec `proot -r rootfs -0`
@@ -25,8 +42,10 @@ first release is a **Lenix Runtime** on top of PRoot — not a full Android VM.
   redraws and `ESC[K` erases and drops the rest of the ANSI/OSC traffic instead of
   printing it; input is echoed locally and `END SHELL` closes stdin, because a
   pipe-backed shell can do neither (ADR-024)
-- Desktop: allocate loopback RFB port 5901–5999, start `Xvnc` + `openbox-session` inside
-  the guest, connect with a pure-Kotlin RFB 3.8 client (Raw encoding, tap → pointer)
+- Desktop: allocate loopback RFB port 5901–5999, start the guest's VNC server +
+  window manager, connect with a pure-Kotlin RFB 3.8 client (Raw encoding, tap → pointer).
+  The desktop packages are not part of the base RootFS — install them once inside the
+  guest (see ADR-025)
 - Settings toggles now do what they say: foreground service while running, auto-open Desktop
 - Unit tests for argv, native copy, RFB handshake/decode, terminal rendering/session I/O,
   and the launch/stop lifecycle

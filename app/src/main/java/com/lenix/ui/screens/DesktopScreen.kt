@@ -31,12 +31,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.lenix.vm.launch.DesktopPackages
 import com.lenix.vm.launch.GuestRuntime
+import com.lenix.vm.launch.ProotCommandBuilder
 import com.lenix.vnc.RfbClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /** Built-in RFB viewer for the Openbox session (Phase 7 / ADR-003).
 
@@ -73,6 +76,17 @@ fun DesktopScreen(
             return@LaunchedEffect
         }
 
+        // A base RootFS has no VNC server: say so with the fix rather than letting the
+        // viewer retry twenty times against a port nothing will ever listen on.
+        val rootfs = File(guestRuntime.instanceRoot(instanceId), "rootfs")
+        val desktopInstalled = withContext(Dispatchers.IO) {
+            DesktopPackages.isDesktopInstalled(rootfs, ProotCommandBuilder.DEFAULT_DESKTOP)
+        }
+        if (!desktopInstalled) {
+            status = DesktopPackages.missingMessage(rootfs, ProotCommandBuilder.DEFAULT_DESKTOP)
+            return@LaunchedEffect
+        }
+
         var lastError = "Connecting to 127.0.0.1:$vncPort"
         status = lastError
         var session: RfbClient? = null
@@ -83,7 +97,8 @@ fun DesktopScreen(
                 // died while we were waiting for Xvnc to start.
                 val currentSession = guestRuntime.session(instanceId)
                 if (currentSession == null || !currentSession.isAlive()) {
-                    status = "Guest session died — press START on Home to launch it again."
+                    status = "The desktop session exited. Open the Terminal window to see " +
+                        "what the guest printed, then press START on Home again."
                     return@LaunchedEffect
                 }
 

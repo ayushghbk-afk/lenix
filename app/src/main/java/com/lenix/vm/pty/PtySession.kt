@@ -64,6 +64,9 @@ class PtySession(
         Thread(runnable, READER_THREAD).apply { isDaemon = true }
     },
 ) {
+    /** Drops the host↔guest handshake tokens instead of printing them at the user. */
+    private val markers = MarkerFilter()
+
     private val decoder = charset.newDecoder()
         .onMalformedInput(CodingErrorAction.REPLACE)
         .onUnmappableCharacter(CodingErrorAction.REPLACE)
@@ -96,6 +99,20 @@ class PtySession(
     val snapshot: StateFlow<TerminalSnapshot> = mutableSnapshot.asStateFlow()
 
     private var reader: Thread? = null
+
+    /**
+     * Seeds the transcript with output the host already consumed before attaching —
+     * `GuestRuntime` reads the guest's first bytes itself while waiting for the startup
+     * marker, and those bytes belong in the window, not in a log the user cannot see.
+     */
+    fun prime(text: String): PtySession {
+        val visible = markers.filter(text)
+        if (visible.isNotEmpty()) {
+            buffer.write(visible)
+            publish()
+        }
+        return this
+    }
 
     /** Starts the reader thread. Idempotent. */
     fun start(): PtySession {
@@ -168,13 +185,13 @@ class PtySession(
                 val read = stdout.read(bytes)
                 if (read < 0) break
                 if (read == 0) continue
-                val text = decode(bytes, read, chars, endOfInput = false)
+                val text = markers.filter(decode(bytes, read, chars, endOfInput = false))
                 if (text.isNotEmpty()) {
                     buffer.write(text)
                     publish()
                 }
             }
-            val tail = decode(bytes, 0, chars, endOfInput = true)
+            val tail = markers.filter(decode(bytes, 0, chars, endOfInput = true)) + markers.flush()
             if (tail.isNotEmpty()) buffer.write(tail)
         } catch (_: IOException) {
             // The guest died or its stdout was closed under us; report it below.
