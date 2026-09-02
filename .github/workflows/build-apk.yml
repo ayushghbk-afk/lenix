@@ -41,12 +41,7 @@ jobs:
           ./gradlew testDebugUnitTest --no-daemon 2>&1 | tee gradle-test.log
           status=$?
           if [ $status -ne 0 ]; then
-            {
-              echo "## Unit test step failed"
-              echo ""
-              echo "### JUnit failures (from test-results XML)"
-              echo '```'
-              python3 - <<'PYEOF'
+            python3 - <<'PYEOF'
           import glob, xml.etree.ElementTree as ET
           shown = 0
           for path in sorted(glob.glob("app/build/test-results/**/*.xml", recursive=True)):
@@ -61,23 +56,20 @@ jobs:
                   if failure is None:
                       continue
                   shown += 1
-                  print(f"FAILED: {case.get('classname')}.{case.get('name')}")
-                  message = (failure.get("message") or "").strip()
-                  if message:
-                      print(f"  message: {message[:600]}")
-                  for line in (failure.text or "").strip().splitlines()[:25]:
-                      print(f"  {line}")
-                  print()
+                  message = (failure.get("message") or "").strip().replace("\n", " ")[:400]
+                  top = ""
+                  for line in (failure.text or "").strip().splitlines():
+                      line = line.strip()
+                      if line.startswith("at com.lenix"):
+                          top = line[:200]
+                          break
+                  print(f"::error title=JUnit failure {shown}::FAILED {case.get('classname')}.{case.get('name')} | {message} | {top}")
           if shown == 0:
-              print("(no failing testcase found in JUnit XML - likely a compile error)")
+              with open("gradle-test.log") as handle:
+                  lines = handle.read().splitlines()
+              interesting = [l for l in lines if l.startswith("e: ") or "FAILED" in l or "error:" in l.lower() or "> Task" in l][-30:]
+              print("::error title=Gradle failure (no JUnit XML)::" + " || ".join(interesting)[:2000])
           PYEOF
-              echo '```'
-              echo ""
-              echo "### Gradle log tail"
-              echo '```'
-              tail -n 120 gradle-test.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit $status
 
